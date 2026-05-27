@@ -1,0 +1,363 @@
+//! Rule executor - applies parsed rules to HTML/JSON content
+//!
+//! Equivalent of Android's AnalyzeRule.kt
+
+use regex::Regex;
+use std::sync::Arc;
+
+use super::analyzers::{HtmlAnalyzer, JsonAnalyzer};
+use super::js_extensions::JsExtState;
+use super::js_runtime::JsRuntime;
+use super::rule_parser::{RuleMode, RuleParser, SourceRule};
+
+/// Executes book source rules against fetched content
+pub struct RuleExecutor {
+    js_state: Arc<JsExtState>,
+    parser: RuleParser,
+}
+
+impl RuleExecutor {
+    pub fn new(js_state: Arc<JsExtState>) -> Self {
+        Self {
+            js_state,
+            parser: RuleParser::new(),
+        }
+    }
+
+    /// Execute a rule string against content, return a single string
+    pub fn get_string(
+        &self,
+        rule_str: &str,
+        content: &str,
+        base_url: Option<&str>,
+    ) -> String {
+        let rules = self.parser.parse(rule_str);
+        let list = self.get_string_list_from_rules(&rules, content, base_url);
+        if list.is_empty() {
+            String::new()
+        } else if list.len() == 1 {
+            list.into_iter().next().unwrap()
+        } else {
+            list.join("\n")
+        }
+    }
+
+    /// Execute a rule string against content, return list of strings
+    pub fn get_string_list(
+        &self,
+        rule_str: &str,
+        content: &str,
+        base_url: Option<&str>,
+    ) -> Vec<String> {
+        let rules = self.parser.parse(rule_str);
+        self.get_string_list_from_rules(&rules, content, base_url)
+    }
+
+    fn get_string_list_from_rules(
+        &self,
+        rules: &[SourceRule],
+        content: &str,
+        base_url: Option<&str>,
+    ) -> Vec<String> {
+        let mut result: Option<String> = None;
+
+        for rule in rules {
+            if rule.rule.is_empty() && !rule.replace_regex.is_empty() {
+                // Only regex replacement
+                if let Some(ref r) = result {
+                    result = Some(self.apply_replace_regex(r, rule));
+                }
+                continue;
+            }
+
+            let raw = match rule.mode {
+                RuleMode::Js => {
+                    let rt = JsRuntime::new(self.js_state.clone());
+                    match rt.execute(&rule.rule, None, None, result.as_deref(), base_url) {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            eprintln!("[RuleExecutor] JS error: {}", e);
+                            None
+                        }
+                    }
+                }
+                RuleMode::Json => {
+                    if let Ok(analyzer) = JsonAnalyzer::new(content) {
+                        analyzer.get_string(&rule.rule)
+                    } else {
+                        None
+                    }
+                }
+                RuleMode::XPath => {
+                    // XPath not yet implemented
+                    eprintln!("[RuleExecutor] XPath not implemented: {}", rule.rule);
+                    None
+                }
+                RuleMode::Css | RuleMode::Regex => {
+                    // Try CSS first; if rule looks like regex, handle differently
+                    Self::execute_css_rule(content, &rule.rule)
+                }
+            };
+
+            result = match raw {
+                Some(mut s) => {
+                    if !rule.replace_regex.is_empty() {
+                        s = self.apply_replace_regex(&s, rule);
+                    }
+                    Some(s)
+                }
+                None => result,
+            };
+        }
+
+        match result {
+            Some(s) => {
+                // Check if result contains newlines - split into list
+                let lines: Vec<String> = s.split('\n').map(|l| l.to_string()).collect();
+                if lines.len() > 1 {
+                    lines.into_iter().filter(|l| !l.is_empty()).collect()
+                } else {
+                    vec![s]
+                }
+            }
+            None => Vec::new(),
+        }
+    }
+
+    /// Execute a CSS rule chain like "class.list@tag.a@text"
+    fn execute_css_rule(content: &str, rule: &str) -> Option<String> {
+        let analyzer = HtmlAnalyzer::new(content);
+
+        // Check if this is a simple CSS selector (no @ chain)
+        if !rule.contains('@') {
+            // Treat as simple selector - get text of first match
+            return analyzer.get_string(rule, None);
+        }
+
+        // Split by @ to get selector chain and extraction rule
+        let parts: Vec<&str> = rule.split('@').collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        // Build CSS selector from parts (except last one)
+        let selector_parts = &parts[..parts.len().saturating_sub(1)];
+        let css_selector = Self::build_css_selector(selector_parts);
+
+        // Last part tells us what to extract
+        let extract = parts.last().unwrap_or(&"text");
+
+        let (selector_str, attr) = match *extract {
+            "text" => (css_selector.as_str(), None),
+            "html" => {
+                return analyzer.get_element_html(&css_selector);
+            }
+            "tag" => {
+                // Return tag name - simplified: use text for now
+                return analyzer.get_string(&css_selector, None);
+            }
+            _ => {
+                // Treat as attribute name
+                if extract.starts_with("attr.") {
+                    (css_selector.as_str(), Some(&extract[5..]))
+                } else {
+                    (css_selector.as_str(), Some(*extract))
+                }
+            }
+        };
+
+        analyzer.get_string(selector_str, attr)
+    }
+
+    /// Build a CSS selector from rule parts like ["class.list", "tag.a"]
+    fn build_css_selector(parts: &[&str]) -> String {
+        let mut selectors = Vec::new();
+        for part in parts {
+            let s = Self::convert_rule_part_to_selector(part);
+            if !s.is_empty() {
+                selectors.push(s);
+            }
+        }
+        selectors.join(" ")
+    }
+
+    /// Convert Legado rule syntax to CSS selector
+    /// Examples:
+    /// - "class.book-list" -> ".book-list"
+    /// - "tag.a" -> "a"
+    /// - "id.main" -> "#main"
+    fn convert_rule_part_to_selector(part: &str) -> String {
+        if part.starts_with("class.") {
+            format!(".{}", &part[6..])
+        } else if part.starts_with("tag.") {
+            part[4..].to_string()
+        } else if part.starts_with("id.") {
+            format!("#{}", &part[3..])
+        } else {
+            part.to_string()
+        }
+    }
+
+    /// Apply regex replacement to a string
+    fn apply_replace_regex(&self,
+        text: &str,
+        rule: &SourceRule,
+    ) -> String {
+        if let Ok(re) = Regex::new(&rule.replace_regex) {
+            if rule.replace_first {
+                re.replace(text, &rule.replacement as &str).to_string()
+            } else {
+                re.replace_all(text, &rule.replacement as &str).to_string()
+            }
+        } else {
+            text.to_string()
+        }
+    }
+
+    /// Get list of element HTMLs for a CSS selector rule
+    pub fn get_element_htmls(&self, rule_str: &str, content: &str) -> Vec<String> {
+        let rules = self.parser.parse(rule_str);
+        if rules.is_empty() {
+            return Vec::new();
+        }
+
+        let rule = &rules[0];
+        match rule.mode {
+            RuleMode::Css => {
+                let analyzer = HtmlAnalyzer::new(content);
+                if !rule.rule.contains('@') {
+                    return analyzer.get_element_html_list(&rule.rule);
+                }
+                let parts: Vec<&str> = rule.rule.split('@').collect();
+                let selector_parts = &parts[..parts.len().saturating_sub(1)];
+                let css_selector = Self::build_css_selector(selector_parts);
+                analyzer.get_element_html_list(&css_selector)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// Get list of strings for a rule that targets multiple elements
+    pub fn get_elements_text_list(
+        &self,
+        rule_str: &str,
+        content: &str,
+    ) -> Vec<String> {
+        let rules = self.parser.parse(rule_str);
+        if rules.is_empty() {
+            return Vec::new();
+        }
+
+        let rule = &rules[0];
+        match rule.mode {
+            RuleMode::Css => {
+                let analyzer = HtmlAnalyzer::new(content);
+                if !rule.rule.contains('@') {
+                    return analyzer.get_string_list(&rule.rule, None);
+                }
+                let parts: Vec<&str> = rule.rule.split('@').collect();
+                let selector_parts = &parts[..parts.len().saturating_sub(1)];
+                let css_selector = Self::build_css_selector(selector_parts);
+                let extract = parts.last().unwrap_or(&"text");
+
+                let attr = if *extract == "text" || *extract == "html" || *extract == "tag" {
+                    None
+                } else if extract.starts_with("attr.") {
+                    Some(&extract[5..])
+                } else {
+                    Some(*extract)
+                };
+
+                analyzer.get_string_list(&css_selector, attr)
+            }
+            RuleMode::Json => {
+                if let Ok(analyzer) = JsonAnalyzer::new(content) {
+                    analyzer.get_string_list(&rule.rule)
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TEST_HTML: &str = r#"
+    <html>
+        <body>
+            <div class="book-list">
+                <a href="/book/1" class="title">Book One</a>
+                <a href="/book/2" class="title">Book Two</a>
+            </div>
+            <div class="info">
+                <span class="author">Author Name</span>
+            </div>
+        </body>
+    </html>
+    "#;
+
+    #[test]
+    fn test_css_rule_text() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("class.info@tag.span@text", TEST_HTML, None);
+        assert_eq!(result, "Author Name");
+    }
+
+    #[test]
+    fn test_css_rule_attr() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("class.book-list@tag.a@href", TEST_HTML, None);
+        assert_eq!(result, "/book/1");
+    }
+
+    #[test]
+    fn test_css_list() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_elements_text_list("class.book-list@tag.a@text", TEST_HTML);
+        assert_eq!(result, vec!["Book One", "Book Two"]);
+    }
+
+    #[test]
+    fn test_regex_replace() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string(
+            "class.info@tag.span@text##Name##Writer",
+            TEST_HTML,
+            None,
+        );
+        assert_eq!(result, "Author Writer");
+    }
+
+    #[test]
+    fn test_json_rule() {
+        let json = r#"{"books": [{"title": "A"}, {"title": "B"}]}"#;
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("$.books[0].title", json, None);
+        assert_eq!(result, "A");
+    }
+
+    #[test]
+    fn test_js_rule() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string(
+            "<js>'hello ' + 'world'</js>",
+            "ignored",
+            None,
+        );
+        assert_eq!(result, "hello world");
+    }
+}

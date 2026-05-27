@@ -1,0 +1,132 @@
+pub mod book_source;
+pub mod commands;
+pub mod db;
+pub mod local_book;
+pub mod server;
+
+use commands::*;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
+        .setup(|app| {
+            db::init_db(app.handle())?;
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            // Book commands
+            get_books,
+            add_book,
+            update_book,
+            delete_book,
+            // BookSource commands
+            get_book_sources,
+            get_enabled_book_sources,
+            add_book_source,
+            update_book_source,
+            delete_book_source,
+            // BookChapter commands
+            get_chapters,
+            add_chapters,
+            delete_chapters,
+            // BookGroup commands
+            get_book_groups,
+            add_book_group,
+            update_book_group,
+            delete_book_group,
+            // ReplaceRule commands
+            get_replace_rules,
+            add_replace_rule,
+            update_replace_rule,
+            delete_replace_rule,
+            // SearchKeyword commands
+            add_search_keyword,
+            get_search_keywords,
+            clear_search_keywords,
+            // Cookie commands
+            set_cookie,
+            get_cookie,
+            delete_cookie,
+            // Cache commands
+            set_cache,
+            get_cache,
+            delete_cache,
+            // Bookmark commands
+            add_bookmark,
+            update_bookmark,
+            delete_bookmark,
+            get_bookmarks,
+            // ReadRecord commands
+            add_read_record,
+            get_read_records,
+            delete_read_record,
+            // HttpTTS commands
+            get_http_tts_list,
+            add_http_tts,
+            update_http_tts,
+            delete_http_tts,
+            // RssSource commands
+            get_rss_sources,
+            add_rss_source,
+            update_rss_source,
+            delete_rss_source,
+            // RssArticle commands
+            get_rss_articles,
+            add_rss_articles,
+            // TxtTocRule commands
+            get_txt_toc_rules,
+            add_txt_toc_rule,
+            update_txt_toc_rule,
+            delete_txt_toc_rule,
+            // RuleSub commands
+            get_rule_subs,
+            add_rule_sub,
+            update_rule_sub,
+            delete_rule_sub,
+            // DictRule commands
+            get_dict_rules,
+            add_dict_rule,
+            update_dict_rule,
+            delete_dict_rule,
+            // KeyboardAssist commands
+            get_keyboard_assists,
+            add_keyboard_assist,
+            update_keyboard_assist,
+            delete_keyboard_assist,
+            // Server commands
+            get_servers,
+            add_server,
+            update_server,
+            delete_server,
+            // RssStar commands
+            get_rss_stars,
+            add_rss_star,
+            delete_rss_star,
+            // RssReadRecord commands
+            mark_rss_read,
+            is_rss_read,
+            // WebBook commands
+            search_books,
+            explore_books,
+            fetch_book_info,
+            fetch_chapter_list,
+            fetch_chapter_content,
+            // Local book import commands
+            import_txt_book,
+            // Chapter content cache commands
+            get_local_chapter_content,
+            save_local_chapter_content,
+            // Source debug commands
+            debug_book_source,
+            // Web server commands
+            start_web_server,
+            stop_web_server,
+            get_web_server_status,
+            // Source import commands
+            import_source_from_url,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
