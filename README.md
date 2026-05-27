@@ -1,110 +1,108 @@
-# [English](English.md) [中文](README.md)
+# Legado Desktop / 开源阅读桌面版
 
-[![icon_android](https://github.com/gedoor/gedoor.github.io/blob/master/static/img/legado/icon_android.png)](https://play.google.com/store/apps/details?id=io.legado.play.release)
-<a href="https://jb.gg/OpenSourceSupport" target="_blank">
-<img width="24" height="24" src="https://resources.jetbrains.com/storage/products/company/brand/logos/jb_beam.svg?_gl=1*135yekd*_ga*OTY4Mjg4NDYzLjE2Mzk0NTE3MzQ.*_ga_9J976DJZ68*MTY2OTE2MzM5Ny4xMy4wLjE2NjkxNjMzOTcuNjAuMC4w&_ga=2.257292110.451256242.1669085120-968288463.1639451734" alt="idea"/>
-</a>
+基于 [Legado（开源阅读）](https://github.com/gedoor/legado) 的桌面端重构，使用 **Tauri v2 + React + TypeScript + Rust** 实现，保留与 Android 版兼容的书源规则引擎。
 
-<div align="center">
-<img width="125" height="125" src="https://github.com/gedoor/legado/raw/master/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" alt="legado"/>  
-  
-Legado / 开源阅读
-<br>
-<a href="https://gedoor.github.io" target="_blank">gedoor.github.io</a> / <a href="https://www.legado.top/" target="_blank">legado.top</a>
-<br>
-Legado is a free and open source novel reader for Android.
-</div>
+> **注意：** 这是一个将 Android 版开源阅读迁移到桌面端的实验性项目。书源规则、数据库 schema 与 Android 版保持兼容，但 UI 和架构完全重写。
 
-[![](https://img.shields.io/badge/-Contents:-696969.svg)](#contents) [![](https://img.shields.io/badge/-Function-F5F5F5.svg)](#Function-主要功能-) [![](https://img.shields.io/badge/-Community-F5F5F5.svg)](#Community-交流社区-) [![](https://img.shields.io/badge/-API-F5F5F5.svg)](#API-) [![](https://img.shields.io/badge/-Other-F5F5F5.svg)](#Other-其他-) [![](https://img.shields.io/badge/-Grateful-F5F5F5.svg)](#Grateful-感谢-) [![](https://img.shields.io/badge/-Interface-F5F5F5.svg)](#Interface-界面-)
+## 技术栈
 
->新用户？
->
->软件不提供内容，需要您自己手动添加，例如导入书源等。
->看看 [官方帮助文档](https://www.yuque.com/legado/wiki)，也许里面就有你要的答案。
+| 层级 | 技术 |
+|------|------|
+| 前端 | React 18 + TypeScript + Vite |
+| 桌面框架 | Tauri v2 (Rust) |
+| 数据层 | SQLite (rusqlite, bundled) |
+| JS 引擎 | rquickjs (QuickJS bindings) |
+| HTTP 客户端 | reqwest |
+| HTML 解析 | scraper (CSS selectors) |
+| 内置服务器 | tiny_http |
 
-# Function-主要功能 [![](https://img.shields.io/badge/-Function-F5F5F5.svg)](#Function-主要功能-)
-[English](English.md)
+## 核心功能
 
-<details><summary>中文</summary>
-1.自定义书源，自己设置规则，抓取网页数据，规则简单易懂，软件内有规则说明。<br>
-2.列表书架，网格书架自由切换。<br>
-3.书源规则支持搜索及发现，所有找书看书功能全部自定义，找书更方便。<br>
-4.订阅内容,可以订阅想看的任何内容,看你想看<br>
-5.支持替换净化，去除广告替换内容很方便。<br>
-6.支持本地TXT、EPUB阅读，手动浏览，智能扫描。<br>
-7.支持高度自定义阅读界面，切换字体、颜色、背景、行距、段距、加粗、简繁转换等。<br>
-8.支持多种翻页模式，覆盖、仿真、滑动、滚动等。<br>
-9.软件开源，持续优化，无广告。
-</details>
+- **兼容书源规则** — 完整支持 Android 版的书源规则语法（CSS/XPath/JSON/JS/Regex），通过 rquickjs 执行用户自定义规则
+- **书架管理** — 分组、封面、阅读进度同步
+- **本地 TXT 导入** — 内置中文章节检测算法，自动拆分章节
+- **在线搜索** — 并发多源搜索，自动去重
+- **阅读器** — 字体/主题/TTS/替换规则/键盘快捷键
+- **RSS 订阅** — 独立 RSS 源管理
+- **书源调试** — 可视化调试工具，查看每一步的请求和解析结果
+- **内置 Web 服务器** — 通过 HTTP API 暴露书架数据
 
-<a href="#readme">
-    <img src="https://img.shields.io/badge/-返回顶部-orange.svg" alt="#" align="right">
-</a>
+## 快速开始
 
-# Community-交流社区 [![](https://img.shields.io/badge/-Community-F5F5F5.svg)](#Community-交流社区-)
+### 环境要求
 
-#### Telegram
-[![Telegram-group](https://img.shields.io/badge/Telegram-%E7%BE%A4%E7%BB%84-blue)](https://t.me/yueduguanfang) [![Telegram-channel](https://img.shields.io/badge/Telegram-%E9%A2%91%E9%81%93-blue)](https://t.me/legado_channels)
+- [Rust](https://rustup.rs/) >= 1.77.2
+- [Node.js](https://nodejs.org/) >= 20
+- [pnpm](https://pnpm.io/) >= 9
 
-#### Discord
-[![Discord](https://img.shields.io/discord/560731361414086666?color=%235865f2&label=Discord)](https://discord.gg/VtUfRyzRXn)
+### 安装依赖
 
-#### Other
-https://www.yuque.com/legado/wiki/community
+```bash
+pnpm install
+```
 
-<a href="#readme">
-    <img src="https://img.shields.io/badge/-返回顶部-orange.svg" alt="#" align="right">
-</a>
+### 开发运行
 
-# API [![](https://img.shields.io/badge/-API-F5F5F5.svg)](#API-)
-* 阅读3.0 提供了2种方式的API：`Web方式`和`Content Provider方式`。您可以在[这里](api.md)根据需要自行调用。 
-* 可通过url唤起阅读进行一键导入,url格式: legado://import/{path}?src={url}
-* path类型: bookSource,rssSource,replaceRule,textTocRule,httpTTS,theme,readConfig,dictRule,[addToBookshelf](/app/src/main/java/io/legado/app/ui/association/AddToBookshelfDialog.kt)
-* path类型解释: 书源,订阅源,替换规则,本地txt小说目录规则,在线朗读引擎,主题,阅读排版,添加到书架
+```bash
+# 方式一：使用 Tauri CLI
+cargo tauri dev
 
-<a href="#readme">
-    <img src="https://img.shields.io/badge/-返回顶部-orange.svg" alt="#" align="right">
-</a>
+# 方式二：分别运行前后端
+# 终端 1：前端 dev server
+pnpm dev
 
-# Other-其他 [![](https://img.shields.io/badge/-Other-F5F5F5.svg)](#Other-其他-)
-##### 免责声明
-https://gedoor.github.io/Disclaimer
+# 终端 2：Tauri 后端
+cd src-tauri && cargo run
+```
 
-##### 阅读3.0
-* [书源规则](https://mgz0227.github.io/The-tutorial-of-Legado/)
-* [更新日志](/app/src/main/assets/updateLog.md)
-* [帮助文档](/app/src/main/assets/web/help/md/appHelp.md)
-* [web端书架](https://github.com/gedoor/legado_web_bookshelf)
-* [web端源编辑](https://github.com/gedoor/legado_web_source_editor)
+### 构建发布版
 
-<a href="#readme">
-    <img src="https://img.shields.io/badge/-返回顶部-orange.svg" alt="#" align="right">
-</a>
+```bash
+cargo tauri build
+```
 
-# Grateful-感谢 [![](https://img.shields.io/badge/-Grateful-F5F5F5.svg)](#Grateful-感谢-)
-> * org.jsoup:jsoup
-> * cn.wanghaomiao:JsoupXpath
-> * com.jayway.jsonpath:json-path
-> * com.github.gedoor:rhino-android
-> * com.squareup.okhttp3:okhttp
-> * com.github.bumptech.glide:glide
-> * org.nanohttpd:nanohttpd
-> * org.nanohttpd:nanohttpd-websocket
-> * cn.bingoogolapple:bga-qrcode-zxing
-> * com.jaredrummler:colorpicker
-> * org.apache.commons:commons-text
-> * io.noties.markwon:core
-> * io.noties.markwon:image-glide
-> * com.hankcs:hanlp
-> * com.positiondev.epublib:epublib-core
-<a href="#readme">
-    <img src="https://img.shields.io/badge/-返回顶部-orange.svg" alt="#" align="right">
-</a>
+构建产物位于 `src-tauri/target/release/bundle/`。
 
-# Interface-界面 [![](https://img.shields.io/badge/-Interface-F5F5F5.svg)](#Interface-界面-)
-<img src="https://github.com/gedoor/gedoor.github.io/blob/master/static/img/legado/%E9%98%85%E8%AF%BB%E7%AE%80%E4%BB%8B1.jpg" width="270"><img src="https://github.com/gedoor/gedoor.github.io/blob/master/static/img/legado/%E9%98%85%E8%AF%BB%E7%AE%80%E4%BB%8B2.jpg" width="270"><img src="https://github.com/gedoor/gedoor.github.io/blob/master/static/img/legado/%E9%98%85%E8%AF%BB%E7%AE%80%E4%BB%8B3.jpg" width="270">
-<img src="https://github.com/gedoor/gedoor.github.io/blob/master/static/img/legado/%E9%98%85%E8%AF%BB%E7%AE%80%E4%BB%8B4.jpg" width="270"><img src="https://github.com/gedoor/gedoor.github.io/blob/master/static/img/legado/%E9%98%85%E8%AF%BB%E7%AE%80%E4%BB%8B5.jpg" width="270"><img src="https://github.com/gedoor/gedoor.github.io/blob/master/static/img/legado/%E9%98%85%E8%AF%BB%E7%AE%80%E4%BB%8B6.jpg" width="270">
+## 项目结构
 
-<a href="#readme">
-    <img src="https://img.shields.io/badge/-返回顶部-orange.svg" alt="#" align="right">
-</a>
+```
+.
+├── src/                    # React 前端
+│   ├── pages/              # 页面组件（Bookshelf, Reader, Search, Debug, RSS）
+│   ├── components/         # 通用组件
+│   └── types.ts            # TypeScript 类型定义
+├── src-tauri/src/          # Rust 后端
+│   ├── book_source/        # 书源规则引擎（rquickjs + scraper + reqwest）
+│   ├── db/                 # SQLite DAO 层（兼容 Room v75 schema）
+│   ├── local_book/         # 本地书籍导入（TXT 章节检测）
+│   ├── server.rs           # 内置 HTTP 服务器
+│   └── commands.rs         # Tauri IPC 命令
+├── src-tauri/Cargo.toml    # Rust 依赖
+├── package.json            # Node 依赖
+└── vite.config.ts          # Vite 配置
+```
+
+## 数据库兼容性
+
+桌面版使用 SQLite 存储数据，schema 基于 Android 版 Room 数据库 v75 版本移植。可以导入 Android 版的备份数据库（需手动迁移）。
+
+## 键盘快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `←` / `A` | 上一章 |
+| `→` / `D` | 下一章 |
+| `Space` | TTS 播放/暂停 |
+| `T` | TTS 开始/停止 |
+| `+` / `-` | 字体大小 |
+| `S` | 设置面板 |
+| `Esc` | 返回书架 |
+
+## 相关项目
+
+- [gedoor/legado](https://github.com/gedoor/legado) — 原版 Android 开源阅读
+- [Legado 书源规则文档](https://mgz0227.github.io/The-tutorial-of-Legado/)
+
+## License
+
+GPL-3.0
