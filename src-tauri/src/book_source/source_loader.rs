@@ -27,25 +27,25 @@ pub async fn load_source_from_url(url: &str) -> Result<Vec<BookSource>, SourceLo
 
 /// Parse book source JSON (single object or array)
 pub fn parse_source_json(json: &str) -> Result<Vec<BookSource>, SourceLoaderError> {
-    let value: Value = serde_json::from_str(json)
-        .map_err(|e| SourceLoaderError::Parse(e.to_string()))?;
+    let value: Value =
+        serde_json::from_str(json).map_err(|e| SourceLoaderError::Parse(e.to_string()))?;
 
     match value {
         Value::Array(arr) => {
             let mut sources = Vec::new();
             for item in arr {
-                let source = json_value_to_source(item)
-                    .map_err(|e| SourceLoaderError::Parse(e))?;
+                let source = json_value_to_source(item).map_err(|e| SourceLoaderError::Parse(e))?;
                 sources.push(source);
             }
             Ok(sources)
         }
         Value::Object(_) => {
-            let source = json_value_to_source(value)
-                .map_err(|e| SourceLoaderError::Parse(e))?;
+            let source = json_value_to_source(value).map_err(|e| SourceLoaderError::Parse(e))?;
             Ok(vec![source])
         }
-        _ => Err(SourceLoaderError::Parse("Expected object or array".to_string())),
+        _ => Err(SourceLoaderError::Parse(
+            "Expected object or array".to_string(),
+        )),
     }
 }
 
@@ -55,34 +55,59 @@ fn json_value_to_source(value: Value) -> Result<BookSource, String> {
 
     let mut source = BookSource::default();
 
-    // Required fields
-    source.book_source_url = get_string_field(obj, "bookSourceUrl")
-        .or_else(|| get_string_field(obj, "bookSourceUrl"))
-        .ok_or("Missing bookSourceUrl")?;
+    // Required fields (support both new and legacy field names)
+    source.book_source_url = get_string_field_any(obj, &["bookSourceUrl", "sourceUrl"])
+        .ok_or("Missing bookSourceUrl or sourceUrl")?;
 
-    source.book_source_name = get_string_field(obj, "bookSourceName")
-        .or_else(|| get_string_field(obj, "bookSourceName"))
-        .unwrap_or_default();
+    source.book_source_name =
+        get_string_field_any(obj, &["bookSourceName", "sourceName"]).unwrap_or_default();
 
     // Optional fields with various naming conventions
-    source.book_source_group = get_string_field(obj, "bookSourceGroup");
-    source.book_url_pattern = get_string_field(obj, "bookUrlPattern");
-    source.js_lib = get_string_field(obj, "jsLib");
-    source.concurrent_rate = get_string_field(obj, "concurrentRate");
-    source.header = get_string_field(obj, "header");
-    source.login_url = get_string_field(obj, "loginUrl");
-    source.login_ui = get_string_field(obj, "loginUi");
-    source.login_check_js = get_string_field(obj, "loginCheckJs");
-    source.cover_decode_js = get_string_field(obj, "coverDecodeJs");
-    source.book_source_comment = get_string_field(obj, "bookSourceComment");
-    source.variable_comment = get_string_field(obj, "variableComment");
-    source.explore_url = get_string_field(obj, "exploreUrl");
-    source.explore_screen = get_string_field(obj, "exploreScreen");
-    source.search_url = get_string_field(obj, "searchUrl");
+    source.book_source_group = get_string_field_any(obj, &["bookSourceGroup", "sourceGroup"]);
+    source.book_url_pattern = get_string_field_any(obj, &["bookUrlPattern"]);
+    source.js_lib = get_string_field_any(obj, &["jsLib"]);
+    source.concurrent_rate = get_string_field_any(obj, &["concurrentRate"]);
+    source.header = get_string_field_any(obj, &["header"]);
+    source.login_url = get_string_field_any(obj, &["loginUrl"]);
+    source.login_ui = get_string_field_any(obj, &["loginUi"]);
+    source.login_check_js = get_string_field_any(obj, &["loginCheckJs"]);
+    source.cover_decode_js = get_string_field_any(obj, &["coverDecodeJs"]);
+    source.book_source_comment = get_string_field_any(obj, &["bookSourceComment", "sourceComment"]);
+    source.variable_comment = get_string_field_any(obj, &["variableComment"]);
+    source.explore_url =
+        get_string_field_any(obj, &["exploreUrl", "findUrl", "ruleFindUrl", "sortUrl"]);
+    source.explore_screen = get_string_field_any(obj, &["exploreScreen"]);
+    source.search_url = get_string_field_any(obj, &["searchUrl", "ruleSearchUrl"]);
 
     // Rule fields (serialized as JSON strings in our DB)
-    if let Some(rule) = obj.get("ruleExplore") {
+    if let Some(rule) = obj.get("ruleExplore").or_else(|| obj.get("ruleFind")) {
         source.rule_explore = Some(rule.to_string());
+    }
+    // Fallback: construct explore rule from RSS-style fields (e.g. 喵公子 subscription)
+    if source.rule_explore.is_none()
+        && (obj.get("ruleArticles").is_some()
+            || obj.get("ruleLink").is_some()
+            || obj.get("ruleTitle").is_some())
+    {
+        let mut explore_map = serde_json::Map::new();
+        if let Some(v) = obj.get("ruleArticles") {
+            explore_map.insert("bookList".to_string(), v.clone());
+        }
+        if let Some(v) = obj.get("ruleTitle") {
+            explore_map.insert("name".to_string(), v.clone());
+        }
+        if let Some(v) = obj.get("ruleLink") {
+            explore_map.insert("bookUrl".to_string(), v.clone());
+        }
+        if let Some(v) = obj.get("ruleContent") {
+            explore_map.insert("intro".to_string(), v.clone());
+        }
+        if let Some(v) = obj.get("ruleImage") {
+            explore_map.insert("coverUrl".to_string(), v.clone());
+        }
+        if !explore_map.is_empty() {
+            source.rule_explore = Some(Value::Object(explore_map).to_string());
+        }
     }
     if let Some(rule) = obj.get("ruleSearch") {
         source.rule_search = Some(rule.to_string());
@@ -100,14 +125,19 @@ fn json_value_to_source(value: Value) -> Result<BookSource, String> {
         source.rule_review = Some(rule.to_string());
     }
 
-    // Numeric/boolean fields
-    if let Some(v) = obj.get("bookSourceType") {
+    // Numeric/boolean fields (support aliases)
+    let type_value = obj
+        .get("bookSourceType")
+        .or_else(|| obj.get("sourceType"))
+        .or_else(|| obj.get("type"));
+    if let Some(v) = type_value {
         source.book_source_type = v.as_i64().unwrap_or(0) as i32;
     }
     if let Some(v) = obj.get("enabled") {
         source.enabled = v.as_bool().unwrap_or(true);
     }
-    if let Some(v) = obj.get("enabledExplore") {
+    let enabled_explore_value = obj.get("enabledExplore").or_else(|| obj.get("enabledFind"));
+    if let Some(v) = enabled_explore_value {
         source.enabled_explore = v.as_bool().unwrap_or(true);
     }
     if let Some(v) = obj.get("enabledCookieJar") {
@@ -125,6 +155,16 @@ fn get_string_field(obj: &serde_json::Map<String, Value>, key: &str) -> Option<S
             None
         }
     })
+}
+
+/// Try multiple field names (for backward compatibility with various source formats)
+fn get_string_field_any(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(v) = get_string_field(obj, key) {
+            return Some(v);
+        }
+    }
+    None
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -177,6 +217,25 @@ mod tests {
         assert_eq!(sources[1].book_source_name, "B");
     }
 
+    #[test]
+    fn test_parse_rss_style_explore_rule() {
+        let json = r#"{
+            "sourceUrl": "https://example.com",
+            "sourceName": "RSS Source",
+            "ruleArticles": "id.content@h3",
+            "ruleLink": "a@href",
+            "ruleTitle": "a@textNodes"
+        }"#;
+
+        let sources = parse_source_json(json).unwrap();
+        assert_eq!(sources.len(), 1);
+        let explore = sources[0].rule_explore.as_ref().unwrap();
+        assert!(explore.contains("bookList"));
+        assert!(explore.contains("id.content@h3"));
+        assert!(explore.contains("bookUrl"));
+        assert!(explore.contains("name"));
+    }
+
     /// Integration test with real book source URL
     #[tokio::test]
     async fn test_load_real_source() {
@@ -187,7 +246,10 @@ mod tests {
             Ok(sources) => {
                 println!("Loaded {} sources", sources.len());
                 for source in &sources {
-                    println!("  - {} ({})", source.book_source_name, source.book_source_url);
+                    println!(
+                        "  - {} ({})",
+                        source.book_source_name, source.book_source_url
+                    );
                 }
                 assert!(!sources.is_empty(), "Should load at least one source");
             }

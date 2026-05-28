@@ -1,84 +1,104 @@
-import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { useNavigate } from "react-router-dom";
-import type { ApiResponse, BookSource, SearchBook, SearchKeyword, RuleSub } from "../types";
+import { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import type { ApiResponse, BookSource, SearchBook, SearchKeyword, RuleSub } from '../types';
 
 export default function Home() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [sources, setSources] = useState<BookSource[]>([]);
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [searchKey, setSearchKey] = useState("");
+  const [searchKey, setSearchKey] = useState('');
   const [searchResults, setSearchResults] = useState<SearchBook[]>([]);
   const [searchHistory, setSearchHistory] = useState<SearchKeyword[]>([]);
   const [ruleSubs, setRuleSubs] = useState<RuleSub[]>([]);
-  const [newSubUrl, setNewSubUrl] = useState("");
-  const [newSubName, setNewSubName] = useState("");
+  const [newSubUrl, setNewSubUrl] = useState('');
+  const [newSubName, setNewSubName] = useState('');
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
     loadSources();
     loadSearchHistory();
     loadRuleSubs();
+    // Restore previous search state from sessionStorage
+    const savedKey = sessionStorage.getItem('searchKey');
+    const savedResults = sessionStorage.getItem('searchResults');
+    if (savedKey) setSearchKey(savedKey);
+    if (savedResults) {
+      try {
+        setSearchResults(JSON.parse(savedResults));
+      } catch {
+        sessionStorage.removeItem('searchResults');
+      }
+    }
   }, []);
+
+  // Clear persisted search state when user clears the input
+  useEffect(() => {
+    if (!searchKey && searchResults.length === 0) {
+      sessionStorage.removeItem('searchKey');
+      sessionStorage.removeItem('searchResults');
+    }
+  }, [searchKey, searchResults]);
 
   async function loadSources() {
     try {
-      const resp = await invoke<ApiResponse<BookSource[]>>("get_book_sources");
+      const resp = await invoke<ApiResponse<BookSource[]>>('get_book_sources');
       if (resp.success && resp.data) {
         setSources(resp.data);
       }
     } catch (e) {
-      console.error("Failed to load sources:", e);
+      console.error('Failed to load sources:', e);
     }
   }
 
   async function loadSearchHistory() {
     try {
-      const resp = await invoke<ApiResponse<SearchKeyword[]>>("get_search_keywords", {
+      const resp = await invoke<ApiResponse<SearchKeyword[]>>('get_search_keywords', {
         limit: 10,
       });
       if (resp.success && resp.data) {
         setSearchHistory(resp.data);
       }
     } catch (e) {
-      console.error("Failed to load search history:", e);
+      console.error('Failed to load search history:', e);
     }
   }
 
   async function saveSearchKeyword(keyword: string) {
     try {
-      await invoke("add_search_keyword", { keyword: keyword.trim() });
+      await invoke('add_search_keyword', { keyword: keyword.trim() });
       await loadSearchHistory();
     } catch (e) {
-      console.error("Failed to save keyword:", e);
+      console.error('Failed to save keyword:', e);
     }
   }
 
   async function clearHistory() {
     try {
-      await invoke("clear_search_keywords");
+      await invoke('clear_search_keywords');
       setSearchHistory([]);
     } catch (e) {
-      console.error("Failed to clear history:", e);
+      console.error('Failed to clear history:', e);
     }
   }
 
   async function loadRuleSubs() {
     try {
-      const resp = await invoke<ApiResponse<RuleSub[]>>("get_rule_subs");
+      const resp = await invoke<ApiResponse<RuleSub[]>>('get_rule_subs');
       if (resp.success && resp.data) {
         setRuleSubs(resp.data);
       }
     } catch (e) {
-      console.error("Failed to load rule subs:", e);
+      console.error('Failed to load rule subs:', e);
     }
   }
 
   async function addRuleSub() {
     if (!newSubUrl.trim() || !newSubName.trim()) return;
     try {
-      await invoke("add_rule_sub", {
+      await invoke('add_rule_sub', {
         sub: {
           name: newSubName.trim(),
           url: newSubUrl.trim(),
@@ -89,222 +109,206 @@ export default function Home() {
           last_update_time: 0,
         },
       });
-      setNewSubUrl("");
-      setNewSubName("");
+      setNewSubUrl('');
+      setNewSubName('');
       await loadRuleSubs();
     } catch (e) {
-      setMessage(`Error adding subscription: ${e}`);
+      setMessage(t('home.addSubscriptionFailed', { error: String(e) }));
     }
   }
 
   async function deleteRuleSub(id: number) {
     try {
-      await invoke("delete_rule_sub", { id });
+      await invoke('delete_rule_sub', { id });
       await loadRuleSubs();
     } catch (e) {
-      setMessage(`Error deleting subscription: ${e}`);
+      setMessage(t('home.deleteSubscriptionFailed', { error: String(e) }));
     }
   }
 
   async function checkSubUpdates() {
     setLoading(true);
-    setMessage("Checking subscriptions...");
-    let updated = 0;
+    setMessage(t('home.checkUpdates'));
     for (const sub of ruleSubs.filter((s) => s.enabled && s.url)) {
       try {
-        const resp = await invoke<ApiResponse<BookSource[]>>("import_source_from_url", {
+        const resp = await invoke<ApiResponse<BookSource[]>>('import_source_from_url', {
           url: sub.url,
         });
         if (resp.success && resp.data) {
           for (const source of resp.data) {
-            await invoke("add_book_source", { source });
+            await invoke('add_book_source', { source });
           }
-          updated += resp.data.length;
         }
       } catch (e) {
         console.error(`Failed to update ${sub.name}:`, e);
       }
     }
-    setMessage(`Updated ${updated} sources from subscriptions`);
+    setMessage(t('home.checkUpdates'));
     setLoading(false);
     await loadSources();
-  }
-
-  async function importSource() {
-    if (!sourceUrl.trim()) return;
-    setLoading(true);
-    setMessage("Importing...");
-    try {
-      const resp = await invoke<ApiResponse<BookSource[]>>("import_source_from_url", {
-        url: sourceUrl.trim(),
-      });
-      if (resp.success && resp.data) {
-        for (const source of resp.data) {
-          await invoke("add_book_source", { source });
-        }
-        setMessage(`Imported ${resp.data.length} sources`);
-        await loadSources();
-      } else {
-        setMessage(`Import failed: ${resp.error || "unknown error"}`);
-      }
-    } catch (e) {
-      setMessage(`Error: ${e}`);
-    }
-    setLoading(false);
   }
 
   async function searchBooks() {
     if (!searchKey.trim()) return;
     const enabledSources = sources.filter((s) => s.enabled && s.search_url);
     if (enabledSources.length === 0) {
-      setMessage("No enabled sources with search URL");
+      setMessage(t('home.noEnabledSources'));
       return;
     }
     setLoading(true);
-    setMessage(`Searching ${enabledSources.length} sources...`);
+    setMessage(t('home.searchingSources', { count: enabledSources.length }));
     setSearchResults([]);
 
-    // Concurrent search across all enabled sources
-    const results = await Promise.allSettled(
-      enabledSources.map(async (source) => {
-        const resp = await invoke<ApiResponse<SearchBook[]>>("search_books", {
-          source,
-          key: searchKey.trim(),
-          page: 1,
-        });
-        if (resp.success && resp.data) {
-          return resp.data;
-        }
-        return [];
-      })
-    );
-
+    const CONCURRENCY = Math.max(1, Math.min(20, parseInt(localStorage.getItem('search_concurrency') || '5', 10) || 5));
     const allResults: SearchBook[] = [];
     const seen = new Set<string>();
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        for (const book of result.value) {
-          const key = `${book.name}|${book.author || ""}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            allResults.push(book);
+
+    for (let i = 0; i < enabledSources.length; i += CONCURRENCY) {
+      const batch = enabledSources.slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.allSettled(
+        batch.map(async (source) => {
+          const resp = await invoke<ApiResponse<SearchBook[]>>('search_books', {
+            source,
+            key: searchKey.trim(),
+            page: 1,
+          });
+          if (resp.success && resp.data) {
+            return resp.data;
+          }
+          return [];
+        })
+      );
+
+      for (const result of batchResults) {
+        if (result.status === 'fulfilled') {
+          for (const book of result.value) {
+            const key = `${book.name}|${book.author || ''}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              allResults.push(book);
+            }
           }
         }
       }
+
+      setMessage(
+        t('home.searchingProgress', {
+          current: Math.min(i + CONCURRENCY, enabledSources.length),
+          total: enabledSources.length,
+        })
+      );
     }
 
     setSearchResults(allResults);
-    setMessage(`Found ${allResults.length} unique results from ${enabledSources.length} sources`);
+    setMessage(
+      t('home.searchResults', { count: allResults.length, sourceCount: enabledSources.length })
+    );
     setLoading(false);
-
-    // Save search keyword to history
     await saveSearchKeyword(searchKey.trim());
+    // Persist search state for page navigation
+    sessionStorage.setItem('searchKey', searchKey.trim());
+    sessionStorage.setItem('searchResults', JSON.stringify(allResults));
   }
 
   async function openBook(book: SearchBook) {
-    setMessage("Loading book info...");
     const source = sources.find((s) => s.book_source_url === book.origin);
     if (!source) {
-      setMessage("Source not found");
+      setMessage(t('explore.sourceNotFound'));
       return;
     }
 
-    const initialBook = {
-      book_url: book.book_url,
-      toc_url: book.toc_url || book.book_url,
-      origin: book.origin || "",
-      origin_name: book.origin_name || "",
-      name: book.name,
-      author: book.author || "",
-      intro: book.intro,
-      cover_url: book.cover_url,
-      latest_chapter_title: book.latest_chapter_title,
-    };
-
-    try {
-      const resp = await invoke<ApiResponse<Record<string, unknown>>>("fetch_book_info", {
+    navigate(`/book/${encodeURIComponent(book.book_url)}`, {
+      state: {
+        preview: true,
         source,
-        book: initialBook,
-      });
-      if (resp.success && resp.data) {
-        const bookData = resp.data as unknown as {
-          book_url: string;
-          toc_url: string;
-          origin: string;
-          origin_name: string;
-          name: string;
-          author: string;
-          intro?: string;
-          cover_url?: string;
-          latest_chapter_title?: string;
-        };
-        await invoke("add_book", { book: bookData });
-        navigate(`/book/${encodeURIComponent(bookData.book_url)}`);
-      } else {
-        setMessage(`Failed to load book info: ${resp.error}`);
-      }
-    } catch (e) {
-      setMessage(`Error: ${e}`);
-    }
+        searchBook: book,
+      },
+    });
   }
+
+  const inputStyle: React.CSSProperties = {
+    padding: '10px 14px',
+    borderRadius: 8,
+    border: '1px solid #e0e0e0',
+    fontSize: 14,
+    outline: 'none',
+    transition: 'border-color 0.2s',
+    fontFamily: 'inherit',
+  };
+
+  const btnPrimary: React.CSSProperties = {
+    padding: '10px 18px',
+    borderRadius: 8,
+    border: 'none',
+    background: '#1976d2',
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'background 0.2s',
+  };
+
+  const btnSecondary: React.CSSProperties = {
+    padding: '8px 16px',
+    borderRadius: 8,
+    border: '1px solid #e0e0e0',
+    background: '#fff',
+    color: '#555',
+    fontSize: 14,
+    cursor: 'pointer',
+    fontWeight: 500,
+  };
 
   return (
     <div>
-      <section style={{ marginBottom: 24 }}>
-        <h2>Import Source</h2>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            type="text"
-            value={sourceUrl}
-            onChange={(e) => setSourceUrl(e.target.value)}
-            placeholder="Enter book source URL"
-            style={{ flex: 1, padding: 8 }}
-          />
-          <button onClick={importSource} disabled={loading}>
-            Import
-          </button>
-        </div>
-      </section>
-
-      <section style={{ marginBottom: 24 }}>
-        <h2>Sources ({sources.length})</h2>
-        <div style={{ maxHeight: 200, overflow: "auto", border: "1px solid #ccc", padding: 8 }}>
-          {sources.length === 0 ? (
-            <p style={{ color: "#888" }}>No sources imported yet</p>
-          ) : (
-            sources.map((s) => (
-              <div key={s.book_source_url} style={{ marginBottom: 4, fontSize: 14 }}>
-                <span style={{ fontWeight: "bold" }}>{s.book_source_name}</span>
-                <span style={{ color: s.enabled ? "green" : "red", marginLeft: 8 }}>
-                  {s.enabled ? "enabled" : "disabled"}
-                </span>
-                {s.search_url && <span style={{ color: "#888", marginLeft: 8 }}>[search]</span>}
-              </div>
-            ))
-          )}
-        </div>
-      </section>
-
-      <section style={{ marginBottom: 24 }}>
-        <h2>Search</h2>
-        <div style={{ display: "flex", gap: 8 }}>
+      {/* Search Section */}
+      <section
+        style={{
+          background: '#fff',
+          borderRadius: 12,
+          padding: 24,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+          marginBottom: 24,
+        }}
+      >
+        <h2 style={{ margin: '0 0 16px', fontSize: 18, fontWeight: 700, color: '#1a1a2e' }}>
+          {t('layout.searchPage')}
+        </h2>
+        <div style={{ display: 'flex', gap: 10 }}>
           <input
             type="text"
             value={searchKey}
             onChange={(e) => setSearchKey(e.target.value)}
-            placeholder="Enter book name"
-            style={{ flex: 1, padding: 8 }}
-            onKeyDown={(e) => e.key === "Enter" && searchBooks()}
+            placeholder={t('home.enterBookName')}
+            style={{ ...inputStyle, flex: 1 }}
+            onKeyDown={(e) => e.key === 'Enter' && searchBooks()}
           />
-          <button onClick={searchBooks} disabled={loading}>
-            Search
+          <button
+            onClick={searchBooks}
+            disabled={loading}
+            style={{
+              ...btnPrimary,
+              opacity: loading ? 0.7 : 1,
+              cursor: loading ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {loading ? t('common.loading') : t('common.search')}
           </button>
         </div>
 
-        {/* Search history */}
         {searchHistory.length > 0 && (
-          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{ fontSize: 13, color: "#888" }}>History:</span>
+          <div
+            style={{
+              marginTop: 14,
+              display: 'flex',
+              gap: 8,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
+            <span style={{ fontSize: 13, color: '#888', fontWeight: 500 }}>
+              {t('home.history')}
+            </span>
             {searchHistory.map((item) => (
               <button
                 key={item.id || item.keyword}
@@ -313,13 +317,14 @@ export default function Home() {
                   searchBooks();
                 }}
                 style={{
-                  padding: "2px 10px",
-                  borderRadius: 12,
-                  border: "1px solid #ddd",
-                  background: "#f5f5f5",
-                  cursor: "pointer",
+                  padding: '4px 12px',
+                  borderRadius: 16,
+                  border: '1px solid #e0e0e0',
+                  background: '#f5f7fa',
+                  cursor: 'pointer',
                   fontSize: 13,
-                  color: "#555",
+                  color: '#555',
+                  fontWeight: 500,
                 }}
               >
                 {item.keyword}
@@ -328,131 +333,315 @@ export default function Home() {
             <button
               onClick={clearHistory}
               style={{
-                padding: "2px 10px",
-                borderRadius: 12,
-                border: "1px solid #ddd",
-                background: "#fff",
-                cursor: "pointer",
+                padding: '4px 12px',
+                borderRadius: 16,
+                border: '1px solid #ffcdd2',
+                background: '#fff0f0',
+                cursor: 'pointer',
                 fontSize: 13,
-                color: "#c00",
+                color: '#f44336',
+                fontWeight: 500,
               }}
             >
-              Clear
+              {t('home.clearHistory')}
             </button>
           </div>
         )}
       </section>
 
-      {message && <p style={{ color: "#666", fontStyle: "italic" }}>{message}</p>}
-
-      <section style={{ marginBottom: 24 }}>
-        <h2>Results ({searchResults.length})</h2>
-        {searchResults.map((book, i) => (
-          <div
-            key={i}
-            onClick={() => openBook(book)}
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: 8,
-              padding: 12,
-              marginBottom: 12,
-              display: "flex",
-              gap: 12,
-              cursor: "pointer",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "#f9f9f9")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
-          >
-            {book.cover_url && (
-              <img
-                src={book.cover_url}
-                alt="cover"
-                style={{ width: 80, height: 100, objectFit: "cover", borderRadius: 4 }}
-                onError={(e) => ((e.target as HTMLImageElement).style.display = "none")}
-              />
+      {/* Source Status */}
+      <section
+        style={{
+          background: '#fff',
+          borderRadius: 12,
+          padding: '16px 24px',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+          marginBottom: 24,
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 14, color: '#555' }}>
+              {sources.length === 0
+                ? t('home.noSources')
+                : t('home.sourcesCount', { count: sources.length })}
+            </span>
+            {sources.length > 0 && (
+              <>
+                <span
+                  style={{
+                    fontSize: 12,
+                    padding: '2px 8px',
+                    borderRadius: 10,
+                    background: '#e3f2fd',
+                    color: '#1565c0',
+                    fontWeight: 500,
+                  }}
+                >
+                  {t('home.searchingSources', {
+                    count: sources.filter((s) => s.enabled && s.search_url).length,
+                  })}
+                </span>
+                <span
+                  style={{
+                    fontSize: 12,
+                    padding: '2px 8px',
+                    borderRadius: 10,
+                    background: '#f3e5f5',
+                    color: '#7b1fa2',
+                    fontWeight: 500,
+                  }}
+                >
+                  {t('bookSources.hasExplore')}:{' '}
+                  {sources.filter((s) => s.enabled && s.explore_url).length}
+                </span>
+              </>
             )}
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: "bold", fontSize: 16 }}>{book.name}</div>
-              <div style={{ color: "#666", fontSize: 14 }}>
-                {book.author} {book.kind && `· ${book.kind}`}
-              </div>
-              {book.latest_chapter_title && (
-                <div style={{ color: "#888", fontSize: 13, marginTop: 4 }}>
-                  Latest: {book.latest_chapter_title}
-                </div>
-              )}
-              {book.intro && (
-                <div style={{ color: "#555", fontSize: 13, marginTop: 4, lineHeight: 1.4 }}>
-                  {book.intro.slice(0, 120)}
-                  {book.intro.length > 120 ? "..." : ""}
-                </div>
-              )}
-              <div style={{ color: "#999", fontSize: 12, marginTop: 4 }}>
-                Source: {book.origin_name || "unknown"}
-              </div>
-            </div>
           </div>
-        ))}
+          <button
+            onClick={() => navigate('/book-sources')}
+            style={{
+              ...btnSecondary,
+              borderColor: '#bbdefb',
+              color: '#1976d2',
+              fontSize: 13,
+              padding: '6px 14px',
+            }}
+          >
+            {t('layout.bookSources')} →
+          </button>
+        </div>
       </section>
 
+      {/* Message */}
+      {message && (
+        <div
+          style={{
+            background: message.includes(t('common.error')) ? '#ffebee' : '#e3f2fd',
+            color: message.includes(t('common.error')) ? '#c62828' : '#1565c0',
+            padding: '10px 16px',
+            borderRadius: 8,
+            marginBottom: 16,
+            fontSize: 14,
+            fontWeight: 500,
+          }}
+        >
+          {message}
+        </div>
+      )}
+
+      {/* Search Results */}
+      {searchResults.length > 0 && (
+        <section style={{ marginBottom: 24 }}>
+          <h2 style={{ fontSize: 18, fontWeight: 700, color: '#1a1a2e', marginBottom: 16 }}>
+            {t('home.resultsCount', { count: searchResults.length })}
+          </h2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {searchResults.map((book) => (
+              <div
+                key={book.book_url}
+                onClick={() => openBook(book)}
+                style={{
+                  background: '#fff',
+                  borderRadius: 12,
+                  padding: 16,
+                  display: 'flex',
+                  gap: 16,
+                  cursor: 'pointer',
+                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+                  transition: 'transform 0.2s, box-shadow 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.1)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)';
+                }}
+              >
+                {book.cover_url ? (
+                  <img
+                    src={book.cover_url}
+                    alt="cover"
+                    style={{
+                      width: 80,
+                      height: 100,
+                      objectFit: 'cover',
+                      borderRadius: 8,
+                      background: '#f0f0f0',
+                      flexShrink: 0,
+                    }}
+                    onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: 80,
+                      height: 100,
+                      borderRadius: 8,
+                      background: 'linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#1976d2',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {book.name.slice(0, 2)}
+                  </div>
+                )}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 16,
+                      color: '#1a1a2e',
+                      marginBottom: 4,
+                    }}
+                  >
+                    {book.name}
+                  </div>
+                  <div style={{ color: '#666', fontSize: 14, marginBottom: 4 }}>
+                    {book.author} {book.kind && `· ${book.kind}`}
+                  </div>
+                  {book.latest_chapter_title && (
+                    <div style={{ color: '#888', fontSize: 13, marginBottom: 4 }}>
+                      {t('home.latest', { chapter: book.latest_chapter_title })}
+                    </div>
+                  )}
+                  {book.intro && (
+                    <div
+                      style={{
+                        color: '#555',
+                        fontSize: 13,
+                        marginBottom: 4,
+                        lineHeight: 1.5,
+                        display: '-webkit-box',
+                        WebkitLineClamp: 2,
+                        WebkitBoxOrient: 'vertical',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      {book.intro}
+                    </div>
+                  )}
+                  <div style={{ color: '#999', fontSize: 12 }}>
+                    {t('home.source', { name: book.origin_name || 'unknown' })}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Rule Subscriptions */}
-      <section style={{ marginTop: 32, borderTop: "2px solid #eee", paddingTop: 24 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2>Source Subscriptions</h2>
-          <button onClick={checkSubUpdates} disabled={loading || ruleSubs.length === 0}>
-            Check Updates
+      <section
+        style={{
+          background: '#fff',
+          borderRadius: 12,
+          padding: 24,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: 16,
+          }}
+        >
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#1a1a2e' }}>
+            {t('home.sourceSubscriptions')}
+          </h2>
+          <button
+            onClick={checkSubUpdates}
+            disabled={loading || ruleSubs.length === 0}
+            style={{
+              ...btnSecondary,
+              borderColor: '#ffe082',
+              color: '#f9a825',
+              opacity: loading || ruleSubs.length === 0 ? 0.6 : 1,
+              cursor: loading || ruleSubs.length === 0 ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {t('home.checkUpdates')}
           </button>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
           <input
             type="text"
-            placeholder="Subscription name"
+            placeholder={t('home.subNamePlaceholder')}
             value={newSubName}
             onChange={(e) => setNewSubName(e.target.value)}
-            style={{ padding: 6, marginRight: 8, width: 150 }}
+            style={{ ...inputStyle, width: 160 }}
           />
           <input
             type="text"
-            placeholder="Subscription URL"
+            placeholder={t('home.subUrlPlaceholder')}
             value={newSubUrl}
             onChange={(e) => setNewSubUrl(e.target.value)}
-            style={{ padding: 6, marginRight: 8, width: 300 }}
+            style={{ ...inputStyle, flex: 1 }}
           />
-          <button onClick={addRuleSub}>Add</button>
+          <button onClick={addRuleSub} style={btnPrimary}>
+            {t('common.add')}
+          </button>
         </div>
 
         {ruleSubs.length === 0 ? (
-          <p style={{ color: "#888" }}>No subscriptions</p>
+          <p style={{ color: '#888', margin: 0 }}>{t('home.noSubscriptions')}</p>
         ) : (
-          <div style={{ border: "1px solid #ddd", borderRadius: 4 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {ruleSubs.map((sub) => (
               <div
                 key={sub.id}
                 style={{
-                  padding: "8px 12px",
-                  borderBottom: "1px solid #eee",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
+                  padding: '12px 16px',
+                  borderRadius: 8,
+                  background: '#fafbfc',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 500 }}>{sub.name || "Unnamed"}</div>
-                  <div style={{ fontSize: 12, color: "#888" }}>{sub.url}</div>
+                  <div style={{ fontWeight: 600, color: '#1a1a2e', fontSize: 14 }}>
+                    {sub.name || t('home.unnamed')}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: '#888',
+                      marginTop: 2,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      maxWidth: 400,
+                    }}
+                    title={sub.url}
+                  >
+                    {sub.url}
+                  </div>
                 </div>
                 <button
                   onClick={() => sub.id && deleteRuleSub(sub.id)}
                   style={{
-                    padding: "2px 8px",
+                    padding: '4px 10px',
                     fontSize: 12,
-                    color: "#c00",
-                    border: "none",
-                    background: "transparent",
-                    cursor: "pointer",
+                    color: '#f44336',
+                    border: '1px solid #ffcdd2',
+                    background: '#fff0f0',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    fontWeight: 500,
                   }}
                 >
-                  Delete
+                  {t('common.delete')}
                 </button>
               </div>
             ))}

@@ -214,7 +214,8 @@ CREATE TABLE IF NOT EXISTS rss_sources (
     ruleDescription TEXT,
     ruleImage TEXT,
     ruleLink TEXT,
-    ruleContent TEXT
+    ruleContent TEXT,
+    singleUrl INTEGER NOT NULL DEFAULT 0
 );
 "#;
 
@@ -325,6 +326,11 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CREATE_READ_RECORDS_TABLE)?;
     conn.execute_batch(CREATE_HTTP_TTS_TABLE)?;
     conn.execute_batch(CREATE_RSS_SOURCES_TABLE)?;
+    // Migrate: add singleUrl column to existing rss_sources tables
+    let _ = conn.execute(
+        "ALTER TABLE rss_sources ADD COLUMN singleUrl INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
     conn.execute_batch(CREATE_RSS_ARTICLES_TABLE)?;
     conn.execute_batch(CREATE_TXT_TOC_RULES_TABLE)?;
     conn.execute_batch(CREATE_RULE_SUBS_TABLE)?;

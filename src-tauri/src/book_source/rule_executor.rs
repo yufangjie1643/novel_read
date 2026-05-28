@@ -25,13 +25,14 @@ impl RuleExecutor {
     }
 
     /// Execute a rule string against content, return a single string
-    pub fn get_string(
-        &self,
-        rule_str: &str,
-        content: &str,
-        base_url: Option<&str>,
-    ) -> String {
-        let rules = self.parser.parse(rule_str);
+    pub fn get_string(&self, rule_str: &str, content: &str, base_url: Option<&str>) -> String {
+        let rendered_rule = self.render_inline_templates(rule_str, content, base_url);
+        let rendered_rule = self.apply_at_js(&rendered_rule, base_url);
+        if rendered_rule != rule_str && !Self::looks_like_executable_rule(&rendered_rule) {
+            return rendered_rule;
+        }
+
+        let rules = self.parser.parse(&rendered_rule);
         let list = self.get_string_list_from_rules(&rules, content, base_url);
         if list.is_empty() {
             String::new()
@@ -49,8 +50,75 @@ impl RuleExecutor {
         content: &str,
         base_url: Option<&str>,
     ) -> Vec<String> {
-        let rules = self.parser.parse(rule_str);
+        let rendered_rule = self.render_inline_templates(rule_str, content, base_url);
+        let rendered_rule = self.apply_at_js(&rendered_rule, base_url);
+        if rendered_rule != rule_str && !Self::looks_like_executable_rule(&rendered_rule) {
+            return if rendered_rule.is_empty() {
+                Vec::new()
+            } else {
+                vec![rendered_rule]
+            };
+        }
+
+        let rules = self.parser.parse(&rendered_rule);
         self.get_string_list_from_rules(&rules, content, base_url)
+    }
+
+    fn render_inline_templates(
+        &self,
+        rule_str: &str,
+        content: &str,
+        base_url: Option<&str>,
+    ) -> String {
+        if !rule_str.contains("{{") {
+            return rule_str.to_string();
+        }
+
+        let Ok(pattern) = Regex::new(r"\{\{([\s\S]*?)\}\}") else {
+            return rule_str.to_string();
+        };
+
+        pattern
+            .replace_all(rule_str, |caps: &regex::Captures| {
+                let expr = caps.get(1).map(|m| m.as_str()).unwrap_or("").trim();
+                if RuleParser::is_json_path(expr) {
+                    return JsonAnalyzer::new(content)
+                        .ok()
+                        .and_then(|analyzer| analyzer.get_value_string(expr))
+                        .unwrap_or_default();
+                }
+
+                let rt = JsRuntime::new(self.js_state.clone());
+                rt.execute(expr, None, None, Some(content), base_url)
+                    .unwrap_or_default()
+            })
+            .to_string()
+    }
+
+    fn apply_at_js(&self, rule_str: &str, base_url: Option<&str>) -> String {
+        let Some(pos) = rule_str.to_ascii_lowercase().find("@js:") else {
+            return rule_str.to_string();
+        };
+
+        let result = &rule_str[..pos];
+        let js_code = &rule_str[pos + 4..];
+        let rt = JsRuntime::new(self.js_state.clone());
+        rt.execute(js_code, None, None, Some(result), base_url)
+            .unwrap_or_else(|_| result.to_string())
+    }
+
+    fn looks_like_executable_rule(rule: &str) -> bool {
+        let trimmed = rule.trim();
+        trimmed.starts_with("$.")
+            || trimmed.starts_with("$[")
+            || trimmed.starts_with("@Json:")
+            || trimmed.starts_with("@CSS:")
+            || trimmed.starts_with("@@")
+            || trimmed.starts_with("@XPath:")
+            || trimmed.starts_with("<js>")
+            || trimmed.starts_with("class.")
+            || trimmed.starts_with("id.")
+            || trimmed.starts_with("tag.")
     }
 
     fn get_string_list_from_rules(
@@ -199,10 +267,7 @@ impl RuleExecutor {
     }
 
     /// Apply regex replacement to a string
-    fn apply_replace_regex(&self,
-        text: &str,
-        rule: &SourceRule,
-    ) -> String {
+    fn apply_replace_regex(&self, text: &str, rule: &SourceRule) -> String {
         if let Ok(re) = Regex::new(&rule.replace_regex) {
             if rule.replace_first {
                 re.replace(text, &rule.replacement as &str).to_string()
@@ -233,16 +298,15 @@ impl RuleExecutor {
                 let css_selector = Self::build_css_selector(selector_parts);
                 analyzer.get_element_html_list(&css_selector)
             }
+            RuleMode::Json => JsonAnalyzer::new(content)
+                .map(|analyzer| analyzer.get_value_list(&rule.rule))
+                .unwrap_or_default(),
             _ => Vec::new(),
         }
     }
 
     /// Get list of strings for a rule that targets multiple elements
-    pub fn get_elements_text_list(
-        &self,
-        rule_str: &str,
-        content: &str,
-    ) -> Vec<String> {
+    pub fn get_elements_text_list(&self, rule_str: &str, content: &str) -> Vec<String> {
         let rules = self.parser.parse(rule_str);
         if rules.is_empty() {
             return Vec::new();
@@ -332,11 +396,7 @@ mod tests {
     fn test_regex_replace() {
         let state = JsExtState::new();
         let exec = RuleExecutor::new(state);
-        let result = exec.get_string(
-            "class.info@tag.span@text##Name##Writer",
-            TEST_HTML,
-            None,
-        );
+        let result = exec.get_string("class.info@tag.span@text##Name##Writer", TEST_HTML, None);
         assert_eq!(result, "Author Writer");
     }
 
@@ -350,14 +410,41 @@ mod tests {
     }
 
     #[test]
+    fn test_json_element_list() {
+        let json = r#"{"books": [{"title": "A"}, {"title": "B"}]}"#;
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_element_htmls("$.books", json);
+
+        assert_eq!(result.len(), 2);
+        assert!(result[0].contains("\"title\":\"A\""));
+    }
+
+    #[test]
+    fn test_json_inline_template() {
+        let json = r#"{"book_id": 42}"#;
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("/novels/api/book/{{$.book_id}}", json, None);
+
+        assert_eq!(result, "/novels/api/book/42");
+    }
+
+    #[test]
+    fn test_inline_template_at_js() {
+        let json = r#"{"status": 50}"#;
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("{{$.status}}@js:result.replace(/50/, '完结')", json, None);
+
+        assert_eq!(result, "完结");
+    }
+
+    #[test]
     fn test_js_rule() {
         let state = JsExtState::new();
         let exec = RuleExecutor::new(state);
-        let result = exec.get_string(
-            "<js>'hello ' + 'world'</js>",
-            "ignored",
-            None,
-        );
+        let result = exec.get_string("<js>'hello ' + 'world'</js>", "ignored", None);
         assert_eq!(result, "hello world");
     }
 }

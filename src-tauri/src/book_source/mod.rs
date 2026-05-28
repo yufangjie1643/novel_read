@@ -14,4 +14,4 @@ pub use js_runtime::{JsRuntime, JsRuntimeError};
 pub use rule_executor::RuleExecutor;
 pub use rule_parser::{RuleMode, RuleParser, SourceRule};
 pub use source_loader::{load_source_from_url, parse_source_json, SourceLoaderError};
-pub use web_book::{WebBook, WebBookError, SearchRule, BookInfoRule, TocRule, ContentRule};
+pub use web_book::{BookInfoRule, ContentRule, SearchRule, TocRule, WebBook, WebBookError};

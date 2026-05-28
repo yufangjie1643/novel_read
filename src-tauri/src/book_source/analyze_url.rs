@@ -85,7 +85,11 @@ impl AnalyzeUrl {
                     result = prefix.replace("@result", &result);
                 }
             }
-            let js_code = cap.get(1).or_else(|| cap.get(2)).map(|m| m.as_str()).unwrap_or("");
+            let js_code = cap
+                .get(1)
+                .or_else(|| cap.get(2))
+                .map(|m| m.as_str())
+                .unwrap_or("");
             match rt.execute(js_code, None, None, Some(&result), None) {
                 Ok(js_result) => result = js_result,
                 Err(e) => {
@@ -143,7 +147,8 @@ impl AnalyzeUrl {
         result = exp_pattern
             .replace_all(&result, |caps: &regex::Captures| {
                 let js_code = &caps[1];
-                match rt.execute(js_code, None, None, None, None) {
+                let wrapped_code = Self::wrap_url_expression(js_code, key, page);
+                match rt.execute(&wrapped_code, None, None, None, None) {
                     Ok(js_result) => js_result,
                     Err(e) => {
                         eprintln!("[AnalyzeUrl] {{}} eval error: {}", e);
@@ -154,6 +159,25 @@ impl AnalyzeUrl {
             .to_string();
 
         result
+    }
+
+    fn wrap_url_expression(js_code: &str, key: Option<&str>, page: Option<i32>) -> String {
+        let mut prelude = String::new();
+
+        if let Some(k) = key {
+            let escaped_key = serde_json::to_string(k).unwrap_or_else(|_| "\"\"".to_string());
+            prelude.push_str(&format!("const key = {escaped_key};"));
+        }
+
+        if let Some(p) = page {
+            prelude.push_str(&format!("const page = {p};"));
+        }
+
+        if prelude.is_empty() {
+            js_code.to_string()
+        } else {
+            format!("(() => {{{prelude}return ({js_code});}})()")
+        }
     }
 
     /// Parse URL and trailing JSON options
@@ -281,47 +305,86 @@ impl AnalyzeUrl {
     pub fn get_str_response(&self) -> Result<String, AnalyzeUrlError> {
         // Execute on a dedicated thread to avoid tokio runtime conflicts
         let params = self.params.clone();
-        std::thread::spawn(move || {
-            let client = match reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => return Err(AnalyzeUrlError::Client("build failed".to_string())),
-            };
-
-            let mut req = match params.method {
-                HttpMethod::Get => {
-                    let url = if let Some(ref body) = params.body {
-                        format!("{}?{}", params.url, body)
-                    } else {
-                        params.url.clone()
-                    };
-                    client.get(url)
-                }
-                HttpMethod::Post => {
-                    let mut req = client.post(&params.url);
-                    if let Some(ref body) = params.body {
-                        req = req.body(body.clone());
-                    }
-                    req
-                }
-            };
-
-            // Set default User-Agent
-            req = req.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-
-            // Apply custom headers
-            for (k, v) in &params.headers {
-                req = req.header(k, v);
+        std::thread::spawn(move || match Self::execute_request(&params, false) {
+            Ok(text) => Ok(text),
+            Err(first_err) if Self::should_retry_without_proxy(&params, &first_err) => {
+                Self::execute_request(&params, true).map_err(|direct_err| {
+                    AnalyzeUrlError::Request(format!(
+                        "proxied request failed: {}; direct retry without proxy failed: {}",
+                        first_err, direct_err
+                    ))
+                })
             }
-
-            let resp = req.send().map_err(|e| AnalyzeUrlError::Request(e.to_string()))?;
-            let text = resp.text().map_err(|e| AnalyzeUrlError::Request(e.to_string()))?;
-            Ok(text)
+            Err(err) => Err(err),
         })
         .join()
         .unwrap_or_else(|_| Err(AnalyzeUrlError::Thread("panicked".to_string())))
+    }
+
+    fn execute_request(
+        params: &RequestParams,
+        without_proxy: bool,
+    ) -> Result<String, AnalyzeUrlError> {
+        let mut builder =
+            reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(30));
+        if without_proxy {
+            builder = builder.no_proxy();
+        }
+        let client = builder
+            .build()
+            .map_err(|e| AnalyzeUrlError::Client(e.to_string()))?;
+
+        let mut req = match params.method {
+            HttpMethod::Get => {
+                let url = if let Some(ref body) = params.body {
+                    format!("{}?{}", params.url, body)
+                } else {
+                    params.url.clone()
+                };
+                client.get(url)
+            }
+            HttpMethod::Post => {
+                let mut req = client.post(&params.url);
+                if let Some(ref body) = params.body {
+                    req = req.body(body.clone());
+                }
+                req
+            }
+        };
+
+        // Set default User-Agent
+        req = req.header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+
+        // Apply custom headers
+        for (k, v) in &params.headers {
+            req = req.header(k, v);
+        }
+
+        let resp = req
+            .send()
+            .map_err(|e| AnalyzeUrlError::Request(e.to_string()))?;
+        resp.text()
+            .map_err(|e| AnalyzeUrlError::Request(e.to_string()))
+    }
+
+    fn should_retry_without_proxy(params: &RequestParams, error: &AnalyzeUrlError) -> bool {
+        Self::should_retry_without_proxy_for_env(params, error, Self::proxy_env_configured())
+    }
+
+    fn should_retry_without_proxy_for_env(
+        params: &RequestParams,
+        error: &AnalyzeUrlError,
+        proxy_env_configured: bool,
+    ) -> bool {
+        params.method == HttpMethod::Get
+            && matches!(error, AnalyzeUrlError::Request(_))
+            && proxy_env_configured
+    }
+
+    fn proxy_env_configured() -> bool {
+        ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"]
+            .iter()
+            .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
     }
 }
 
@@ -415,6 +478,36 @@ mod tests {
     }
 
     #[test]
+    fn test_page_placeholder_replacement() {
+        let state = JsExtState::new();
+        let au = AnalyzeUrl::new(
+            "https://example.com/search?q={{key}}&page={{page}}",
+            None,
+            Some("book"),
+            Some(3),
+            state,
+        );
+
+        assert_eq!(au.params.url, "https://example.com/search");
+        assert_eq!(au.params.body, Some("q=book&page=3".to_string()));
+    }
+
+    #[test]
+    fn test_page_expression_replacement() {
+        let state = JsExtState::new();
+        let au = AnalyzeUrl::new(
+            "https://example.com/search?offset={{(page - 1) * 20}}&q={{key}}",
+            None,
+            Some("book"),
+            Some(4),
+            state,
+        );
+
+        assert_eq!(au.params.url, "https://example.com/search");
+        assert_eq!(au.params.body, Some("offset=60&q=book".to_string()));
+    }
+
+    #[test]
     fn test_page_overflow() {
         let state = JsExtState::new();
         let au = AnalyzeUrl::new(
@@ -425,5 +518,47 @@ mod tests {
             state,
         );
         assert_eq!(au.params.url, "https://example.com/list_3.html");
+    }
+
+    #[test]
+    fn test_get_transport_error_retries_without_proxy_when_proxy_env_exists() {
+        let params = RequestParams {
+            url: "https://example.com/book".to_string(),
+            method: HttpMethod::Get,
+            ..Default::default()
+        };
+        let error = AnalyzeUrlError::Request("error sending request".to_string());
+
+        assert!(AnalyzeUrl::should_retry_without_proxy_for_env(
+            &params, &error, true
+        ));
+    }
+
+    #[test]
+    fn test_post_transport_error_does_not_retry_without_proxy() {
+        let params = RequestParams {
+            url: "https://example.com/api".to_string(),
+            method: HttpMethod::Post,
+            ..Default::default()
+        };
+        let error = AnalyzeUrlError::Request("error sending request".to_string());
+
+        assert!(!AnalyzeUrl::should_retry_without_proxy_for_env(
+            &params, &error, true
+        ));
+    }
+
+    #[test]
+    fn test_get_transport_error_does_not_retry_without_proxy_env() {
+        let params = RequestParams {
+            url: "https://example.com/book".to_string(),
+            method: HttpMethod::Get,
+            ..Default::default()
+        };
+        let error = AnalyzeUrlError::Request("error sending request".to_string());
+
+        assert!(!AnalyzeUrl::should_retry_without_proxy_for_env(
+            &params, &error, false
+        ));
     }
 }

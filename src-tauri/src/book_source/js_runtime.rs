@@ -58,8 +58,17 @@ impl JsRuntime {
             // Convert result to string
             let result_str = if result.is_null() || result.is_undefined() {
                 "null".to_string()
+            } else if let Some(n) = result.as_number() {
+                if n.fract() == 0.0 {
+                    format!("{n:.0}")
+                } else {
+                    n.to_string()
+                }
+            } else if let Some(b) = result.as_bool() {
+                b.to_string()
             } else {
-                result.as_string()
+                result
+                    .as_string()
                     .and_then(|s| s.to_string().ok())
                     .unwrap_or_else(|| "[object]".to_string())
             };
@@ -91,9 +100,12 @@ impl JsRuntime {
         let s = state.clone();
         java.set(
             "getCookie",
-            Function::new(ctx.clone(), move |tag: String, key: Option<String>| -> String {
-                s.get_cookie(&tag, key.as_deref())
-            })?
+            Function::new(
+                ctx.clone(),
+                move |tag: String, key: Option<String>| -> String {
+                    s.get_cookie(&tag, key.as_deref())
+                },
+            )?
             .with_name("getCookie")?,
         )?;
 
@@ -121,10 +133,8 @@ impl JsRuntime {
         let s = state.clone();
         java.set(
             "randomUUID",
-            Function::new(ctx.clone(), move || -> String {
-                s.random_uuid()
-            })?
-            .with_name("randomUUID")?,
+            Function::new(ctx.clone(), move || -> String { s.random_uuid() })?
+                .with_name("randomUUID")?,
         )?;
 
         // java.get(key) - from cache
@@ -151,10 +161,8 @@ impl JsRuntime {
         let s = state.clone();
         java.set(
             "ajax",
-            Function::new(ctx.clone(), move |url: String| -> String {
-                s.ajax(&url)
-            })?
-            .with_name("ajax")?,
+            Function::new(ctx.clone(), move |url: String| -> String { s.ajax(&url) })?
+                .with_name("ajax")?,
         )?;
 
         Ok(java)
@@ -184,10 +192,9 @@ mod tests {
         let state = JsExtState::new();
         let rt = JsRuntime::new(state);
 
-        let result = rt.execute(
-            "'hello' + ' ' + 'world'",
-            None, None, None, None
-        ).unwrap();
+        let result = rt
+            .execute("'hello' + ' ' + 'world'", None, None, None, None)
+            .unwrap();
 
         assert_eq!(result, "hello world");
     }
@@ -197,12 +204,21 @@ mod tests {
         let state = JsExtState::new();
         let rt = JsRuntime::new(state);
 
-        let result = rt.execute(
-            "result.toUpperCase()",
-            None, None, Some("test"), None
-        ).unwrap();
+        let result = rt
+            .execute("result.toUpperCase()", None, None, Some("test"), None)
+            .unwrap();
 
         assert_eq!(result, "TEST");
+    }
+
+    #[test]
+    fn test_js_number_result() {
+        let state = JsExtState::new();
+        let rt = JsRuntime::new(state);
+
+        let result = rt.execute("1 + 2", None, None, None, None).unwrap();
+
+        assert_eq!(result, "3");
     }
 
     #[test]
@@ -210,10 +226,9 @@ mod tests {
         let state = JsExtState::new();
         let rt = JsRuntime::new(state);
 
-        let result = rt.execute(
-            "java.log('test message'); 'ok'",
-            None, None, None, None
-        ).unwrap();
+        let result = rt
+            .execute("java.log('test message'); 'ok'", None, None, None, None)
+            .unwrap();
 
         assert_eq!(result, "ok");
     }
@@ -223,10 +238,9 @@ mod tests {
         let state = JsExtState::new();
         let rt = JsRuntime::new(state);
 
-        let result = rt.execute(
-            "java.base64Encode('hello')",
-            None, None, None, None
-        ).unwrap();
+        let result = rt
+            .execute("java.base64Encode('hello')", None, None, None, None)
+            .unwrap();
 
         assert_eq!(result, "aGVsbG8=");
     }
@@ -238,13 +252,19 @@ mod tests {
 
         let result = rt.execute(
             "java.ajax('https://httpbin.org/get')",
-            None, None, None, None
+            None,
+            None,
+            None,
+            None,
         );
 
         match result {
             Ok(text) => {
-                assert!(text.contains("httpbin.org") || text.contains("{\"url\""),
-                    "Expected httpbin response, got: {}", text);
+                assert!(
+                    text.contains("httpbin.org") || text.contains("{\"url\""),
+                    "Expected httpbin response, got: {}",
+                    text
+                );
             }
             Err(e) => {
                 println!("AJAX test skipped (network unavailable): {}", e);

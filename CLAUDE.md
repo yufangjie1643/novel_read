@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code when working on this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
@@ -67,6 +67,36 @@ The core feature inherited from Android. Users define `BookSource` entities with
 - Single SQLite file managed by rusqlite (bundled feature, no external SQLite needed)
 - Schema ported from Android Room v75 — 20+ entities (`Book`, `BookSource`, `BookChapter`, `ReplaceRule`, `RssSource`, etc.)
 - No ORM — raw SQL queries in `db/dao.rs`
+
+## Cross-Cutting Patterns
+
+### IPC Contract
+
+All frontend→backend calls use Tauri's `invoke()` and return a uniform `ApiResponse<T>`:
+
+```rust
+// Rust side (commands.rs)
+#[tauri::command]
+pub fn get_books() -> ApiResponse<Vec<Book>> { ... }
+
+// Frontend side
+const books = await invoke<ApiResponse<Book[]>>("get_books");
+if (books.success) { /* use books.data */ }
+```
+
+Every command follows this pattern: `success: bool`, `data: Option<T>`, `error: Option<String>`. When adding a new command, register it in both `commands.rs` and `lib.rs`'s `invoke_handler!` macro.
+
+### Database Access
+
+The database is a global singleton accessed via `db::db()` (`src-tauri/src/db/mod.rs`). It is initialized at app startup in `lib.rs` via `db::init_db()` and stored in a `static mut DB`. DAOs take a `&Database` reference — all queries are blocking (rusqlite's synchronous API) and run on Tauri's command thread pool.
+
+### WebBook Lifecycle
+
+Web book operations (search, explore, fetch info/chapters/content) are stateless per call. Each command constructs a fresh `JsExtState` + `WebBook` pair (`src-tauri/src/commands.rs` lines 916–1003). There is no persistent JS runtime across calls — state is carried through the database (`Cookie`, `Cache` tables) and the `JsExtState` clone passed into `AnalyzeUrl`.
+
+### Vite HMR
+
+`vite.config.ts` uses `TAURI_DEV_HOST` for cross-platform HMR during `cargo tauri dev`. Do not change `strictPort: true` or port `1420` without also updating `tauri.conf.json`.
 
 ## Development Rules
 

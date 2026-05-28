@@ -2,14 +2,46 @@ export interface BookSource {
   book_source_url: string;
   book_source_name: string;
   book_source_group?: string;
+  book_source_type?: number;
+  book_url_pattern?: string;
+  custom_order?: number;
   enabled: boolean;
   enabled_explore: boolean;
+  js_lib?: string;
+  enabled_cookie_jar?: boolean;
+  concurrent_rate?: string;
+  header?: string;
+  login_url?: string;
+  login_ui?: string;
+  login_check_js?: string;
+  cover_decode_js?: string;
+  book_source_comment?: string;
+  variable_comment?: string;
+  last_update_time?: number;
+  respond_time?: number;
+  weight?: number;
   explore_url?: string;
+  explore_screen?: string;
   search_url?: string;
+  rule_search?: string;
   rule_book_info?: string;
   rule_toc?: string;
   rule_content?: string;
   rule_explore?: string;
+  rule_review?: string;
+}
+
+export interface ExploreItem {
+  id: string;
+  source_url: string;
+  source_name: string;
+  label: string;
+  url: string;
+}
+
+export interface ExploreItemsPage {
+  items: ExploreItem[];
+  total: number;
 }
 
 export interface SearchBook {
@@ -40,7 +72,11 @@ export interface Book {
   dur_chapter_pos?: number;
   dur_chapter_time?: number;
   total_chapter_num?: number;
+  can_update?: boolean;
   group?: number;
+  order?: number;
+  read_config?: string;
+  sync_time?: number;
 }
 
 export interface BookChapter {
@@ -97,6 +133,14 @@ export interface RssSource {
   rule_image?: string;
   rule_link?: string;
   rule_content?: string;
+  single_url?: boolean;
+}
+
+export interface SourceLink {
+  raw_url: string;
+  source_url: string;
+  link_type: string;
+  label?: string;
 }
 
 export interface RuleSub {
@@ -120,6 +164,74 @@ export interface RssArticle {
   link?: string;
   pub_date?: string;
   variable?: string;
+}
+
+export interface Bookmark {
+  id?: number;
+  book_name: string;
+  book_author: string;
+  chapter_name?: string;
+  book_url?: string;
+  chapter_url?: string;
+  chapter_index: number;
+  page_index: number;
+  content?: string;
+}
+
+export interface ReadRecord {
+  book_name: string;
+  read_time: number;
+  last_read: number;
+}
+
+export interface HttpTTS {
+  id?: number;
+  name?: string;
+  url?: string;
+  content_type?: string;
+  login_url?: string;
+  login_ui?: string;
+  header?: string;
+  enabled: boolean;
+  concurrent_rate?: string;
+  last_update_time: number;
+}
+
+export interface TxtTocRule {
+  id?: number;
+  name?: string;
+  rule?: string;
+  enabled: boolean;
+  order: number;
+}
+
+export interface DictRule {
+  id?: number;
+  name?: string;
+  url?: string;
+  enabled: boolean;
+}
+
+export interface KeyboardAssist {
+  id?: number;
+  assist_type: number;
+  key?: string;
+  value?: string;
+  serial_no: number;
+}
+
+export interface Server {
+  id?: number;
+  name?: string;
+  url?: string;
+  enabled: boolean;
+}
+
+export interface RssStar {
+  id?: number;
+  origin: string;
+  sort?: string;
+  title: string;
 }
 
 export interface ApiResponse<T> {

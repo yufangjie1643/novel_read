@@ -18,10 +18,7 @@ impl HtmlAnalyzer {
     }
 
     /// Get string result from CSS selector
-    pub fn get_string(&self,
-        selector_str: &str,
-        attr: Option<&str>,
-    ) -> Option<String> {
+    pub fn get_string(&self, selector_str: &str, attr: Option<&str>) -> Option<String> {
         let selector = Selector::parse(selector_str).ok()?;
         let element = self.document.select(&selector).next()?;
 
@@ -39,11 +36,7 @@ impl HtmlAnalyzer {
     }
 
     /// Get all matching strings from CSS selector
-    pub fn get_string_list(
-        &self,
-        selector_str: &str,
-        attr: Option<&str>,
-    ) -> Vec<String> {
+    pub fn get_string_list(&self, selector_str: &str, attr: Option<&str>) -> Vec<String> {
         let Ok(selector) = Selector::parse(selector_str) else {
             return Vec::new();
         };
@@ -62,18 +55,14 @@ impl HtmlAnalyzer {
     }
 
     /// Get HTML of first matching element
-    pub fn get_element_html(&self,
-        selector_str: &str,
-    ) -> Option<String> {
+    pub fn get_element_html(&self, selector_str: &str) -> Option<String> {
         let selector = Selector::parse(selector_str).ok()?;
         let element = self.document.select(&selector).next()?;
         Some(element.html())
     }
 
     /// Get all matching element HTMLs
-    pub fn get_element_html_list(&self,
-        selector_str: &str,
-    ) -> Vec<String> {
+    pub fn get_element_html_list(&self, selector_str: &str) -> Vec<String> {
         let Ok(selector) = Selector::parse(selector_str) else {
             return Vec::new();
         };
@@ -103,9 +92,7 @@ impl JsonAnalyzer {
 
     /// Get string from JSONPath-like path
     /// Supports: $.key, $.key[0], $.key.nested
-    pub fn get_string(&self,
-        path: &str,
-    ) -> Option<String> {
+    pub fn get_string(&self, path: &str) -> Option<String> {
         let value = self.resolve_path(path)?;
         match value {
             Value::String(s) => Some(s.clone()),
@@ -116,9 +103,7 @@ impl JsonAnalyzer {
     }
 
     /// Get string list from JSONPath-like path
-    pub fn get_string_list(&self,
-        path: &str,
-    ) -> Vec<String> {
+    pub fn get_string_list(&self, path: &str) -> Vec<String> {
         match self.resolve_path(path) {
             Some(Value::Array(arr)) => arr
                 .iter()
@@ -137,10 +122,32 @@ impl JsonAnalyzer {
         }
     }
 
+    /// Get raw JSON values at a path, serialized for downstream rule execution.
+    pub fn get_value_list(&self, path: &str) -> Vec<String> {
+        match self.resolve_path(path) {
+            Some(Value::Array(arr)) => arr.iter().map(Self::value_to_rule_input).collect(),
+            Some(value) => vec![Self::value_to_rule_input(value)],
+            None => Vec::new(),
+        }
+    }
+
+    /// Get a raw JSON value at a path. Strings are returned without quotes.
+    pub fn get_value_string(&self, path: &str) -> Option<String> {
+        self.resolve_path(path).map(Self::value_to_rule_input)
+    }
+
+    fn value_to_rule_input(value: &Value) -> String {
+        match value {
+            Value::String(s) => s.clone(),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => String::new(),
+            Value::Array(_) | Value::Object(_) => value.to_string(),
+        }
+    }
+
     /// Resolve a JSONPath-like path to a Value
-    fn resolve_path(&self,
-        path: &str,
-    ) -> Option<&Value> {
+    fn resolve_path(&self, path: &str) -> Option<&Value> {
         // Remove leading $.
         let path = path.trim_start_matches("$").trim_start_matches(".");
         if path.is_empty() {
@@ -241,5 +248,22 @@ mod tests {
         let result = analyzer.get_string_list("$.books");
         // Array of objects - should return empty for now (needs better handling)
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_json_get_value_list() {
+        let analyzer = JsonAnalyzer::new(TEST_JSON).unwrap();
+        let result = analyzer.get_value_list("$.books");
+
+        assert_eq!(result.len(), 2);
+        assert!(result[0].contains("Book One"));
+    }
+
+    #[test]
+    fn test_json_get_value_string() {
+        let analyzer = JsonAnalyzer::new(TEST_JSON).unwrap();
+        let result = analyzer.get_value_string("$.books[0]");
+
+        assert!(result.unwrap().contains("Author A"));
     }
 }

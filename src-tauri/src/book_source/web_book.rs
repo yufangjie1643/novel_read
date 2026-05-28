@@ -16,6 +16,7 @@ use super::rule_executor::RuleExecutor;
 // ============================================================================
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchRule {
     pub book_list: Option<String>,
     pub name: Option<String>,
@@ -29,6 +30,7 @@ pub struct SearchRule {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ExploreRule {
     pub book_list: Option<String>,
     pub name: Option<String>,
@@ -42,6 +44,7 @@ pub struct ExploreRule {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct BookInfoRule {
     pub name: Option<String>,
     pub author: Option<String>,
@@ -55,6 +58,7 @@ pub struct BookInfoRule {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct TocRule {
     pub chapter_list: Option<String>,
     pub chapter_name: Option<String>,
@@ -66,6 +70,7 @@ pub struct TocRule {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ContentRule {
     pub content: Option<String>,
     pub title: Option<String>,
@@ -86,10 +91,7 @@ pub struct WebBook {
 impl WebBook {
     pub fn new(js_state: Arc<JsExtState>) -> Self {
         let executor = RuleExecutor::new(js_state.clone());
-        Self {
-            js_state,
-            executor,
-        }
+        Self { js_state, executor }
     }
 
     // ==================== Search ====================
@@ -101,7 +103,9 @@ impl WebBook {
         key: &str,
         page: Option<i32>,
     ) -> Result<Vec<SearchBook>, WebBookError> {
-        let search_url = source.search_url.as_ref()
+        let search_url = source
+            .search_url
+            .as_ref()
             .ok_or_else(|| WebBookError::NoSearchUrl)?;
 
         // Parse search URL
@@ -114,19 +118,20 @@ impl WebBook {
         );
 
         // Fetch response
-        let body = analyze_url.get_str_response()
+        let body = analyze_url
+            .get_str_response()
             .map_err(|e| WebBookError::Request(e.to_string()))?;
 
         // Parse search rules
         let search_rule: SearchRule = if let Some(rule_json) = &source.rule_search {
-            serde_json::from_str(rule_json)
-                .unwrap_or_default()
+            serde_json::from_str(rule_json).map_err(|e| {
+                WebBookError::RuleParse(format!("Failed to parse search rule: {}", e))
+            })?
         } else {
             return Ok(Vec::new());
         };
 
-        let book_list_rule = search_rule.book_list.as_deref()
-            .unwrap_or("");
+        let book_list_rule = search_rule.book_list.as_deref().unwrap_or("");
 
         let base_url = analyze_url.params.base_url.clone();
 
@@ -137,9 +142,7 @@ impl WebBook {
                 origin_name: Some(source.book_source_name.clone()),
                 ..SearchBook::default()
             };
-            self.fill_search_book(
-                &mut book, &body, &search_rule, &base_url,
-            )?;
+            self.fill_search_book(&mut book, &body, &search_rule, &base_url)?;
             if !book.name.is_empty() {
                 return Ok(vec![book]);
             }
@@ -156,9 +159,7 @@ impl WebBook {
                 origin_name: Some(source.book_source_name.clone()),
                 ..SearchBook::default()
             };
-            self.fill_search_book(
-                &mut book, &element_html, &search_rule, &base_url,
-            )?;
+            self.fill_search_book(&mut book, &element_html, &search_rule, &base_url)?;
             if !book.name.is_empty() {
                 results.push(book);
             }
@@ -184,12 +185,14 @@ impl WebBook {
             self.js_state.clone(),
         );
 
-        let body = analyze_url.get_str_response()
+        let body = analyze_url
+            .get_str_response()
             .map_err(|e| WebBookError::Request(e.to_string()))?;
 
         let explore_rule: ExploreRule = if let Some(rule_json) = &source.rule_explore {
-            serde_json::from_str(rule_json)
-                .unwrap_or_default()
+            serde_json::from_str(rule_json).map_err(|e| {
+                WebBookError::RuleParse(format!("Failed to parse explore rule: {}", e))
+            })?
         } else {
             return Ok(Vec::new());
         };
@@ -235,7 +238,9 @@ impl WebBook {
         rule: &ExploreRule,
         base_url: &str,
     ) -> Result<(), WebBookError> {
-        book.name = rule.name.as_ref()
+        book.name = rule
+            .name
+            .as_ref()
             .map(|r| self.executor.get_string(r, content, Some(base_url)))
             .unwrap_or_default();
 
@@ -243,52 +248,90 @@ impl WebBook {
             return Ok(());
         }
 
-        book.author = rule.author.as_ref()
+        book.author = rule
+            .author
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
-        book.book_url = rule.book_url.as_ref()
+        book.book_url = rule
+            .book_url
+            .as_ref()
             .map(|r| {
                 let url = self.executor.get_string(r, content, Some(base_url));
                 Self::resolve_url(&url, base_url)
             })
             .unwrap_or_else(|| base_url.to_string());
 
-        book.cover_url = rule.cover_url.as_ref()
+        book.cover_url = rule
+            .cover_url
+            .as_ref()
             .map(|r| {
                 let url = self.executor.get_string(r, content, Some(base_url));
-                if url.is_empty() { None } else { Some(Self::resolve_url(&url, base_url)) }
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(Self::resolve_url(&url, base_url))
+                }
             })
             .flatten();
 
-        book.intro = rule.intro.as_ref()
+        book.intro = rule
+            .intro
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
-        book.kind = rule.kind.as_ref()
+        book.kind = rule
+            .kind
+            .as_ref()
             .map(|r| {
                 let list = self.executor.get_string_list(r, content, Some(base_url));
-                if list.is_empty() { None } else { Some(list.join(",")) }
+                if list.is_empty() {
+                    None
+                } else {
+                    Some(list.join(","))
+                }
             })
             .flatten();
 
-        book.latest_chapter_title = rule.last_chapter.as_ref()
+        book.latest_chapter_title = rule
+            .last_chapter
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
-        book.word_count = rule.word_count.as_ref()
+        book.word_count = rule
+            .word_count
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
@@ -303,7 +346,9 @@ impl WebBook {
         base_url: &str,
     ) -> Result<(), WebBookError> {
         // Name (required)
-        book.name = rule.name.as_ref()
+        book.name = rule
+            .name
+            .as_ref()
             .map(|r| self.executor.get_string(r, content, Some(base_url)))
             .unwrap_or_default();
 
@@ -312,15 +357,23 @@ impl WebBook {
         }
 
         // Author
-        book.author = rule.author.as_ref()
+        book.author = rule
+            .author
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
         // Book URL
-        book.book_url = rule.book_url.as_ref()
+        book.book_url = rule
+            .book_url
+            .as_ref()
             .map(|r| {
                 let url = self.executor.get_string(r, content, Some(base_url));
                 Self::resolve_url(&url, base_url)
@@ -328,42 +381,72 @@ impl WebBook {
             .unwrap_or_else(|| base_url.to_string());
 
         // Cover URL
-        book.cover_url = rule.cover_url.as_ref()
+        book.cover_url = rule
+            .cover_url
+            .as_ref()
             .map(|r| {
                 let url = self.executor.get_string(r, content, Some(base_url));
-                if url.is_empty() { None } else { Some(Self::resolve_url(&url, base_url)) }
+                if url.is_empty() {
+                    None
+                } else {
+                    Some(Self::resolve_url(&url, base_url))
+                }
             })
             .flatten();
 
         // Intro
-        book.intro = rule.intro.as_ref()
+        book.intro = rule
+            .intro
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
         // Kind
-        book.kind = rule.kind.as_ref()
+        book.kind = rule
+            .kind
+            .as_ref()
             .map(|r| {
                 let list = self.executor.get_string_list(r, content, Some(base_url));
-                if list.is_empty() { None } else { Some(list.join(",")) }
+                if list.is_empty() {
+                    None
+                } else {
+                    Some(list.join(","))
+                }
             })
             .flatten();
 
         // Last chapter
-        book.latest_chapter_title = rule.last_chapter.as_ref()
+        book.latest_chapter_title = rule
+            .last_chapter
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
         // Word count
-        book.word_count = rule.word_count.as_ref()
+        book.word_count = rule
+            .word_count
+            .as_ref()
             .map(|r| {
                 let text = self.executor.get_string(r, content, Some(base_url));
-                if text.is_empty() { None } else { Some(text) }
+                if text.is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
             })
             .flatten();
 
@@ -373,70 +456,93 @@ impl WebBook {
     // ==================== Book Info ====================
 
     /// Fetch and parse book info
-    pub fn get_book_info(
-        &self,
-        source: &BookSource,
-        book: &mut Book,
-    ) -> Result<(), WebBookError> {
+    pub fn get_book_info(&self, source: &BookSource, book: &mut Book) -> Result<(), WebBookError> {
         let book_url = &book.book_url;
 
         let analyze_url = AnalyzeUrl::new(
             book_url,
             Some(&source.book_source_url),
-            None, None,
+            None,
+            None,
             self.js_state.clone(),
         );
 
-        let body = analyze_url.get_str_response()
+        let body = analyze_url
+            .get_str_response()
             .map_err(|e| WebBookError::Request(e.to_string()))?;
 
         let info_rule: BookInfoRule = if let Some(rule_json) = &source.rule_book_info {
-            serde_json::from_str(rule_json)
-                .unwrap_or_default()
+            serde_json::from_str(rule_json).map_err(|e| {
+                WebBookError::RuleParse(format!("Failed to parse book info rule: {}", e))
+            })?
         } else {
             return Ok(());
         };
 
         let base_url = &analyze_url.params.base_url;
+        let rule_body = info_rule
+            .init
+            .as_deref()
+            .and_then(|rule| {
+                self.executor
+                    .get_element_htmls(rule, &body)
+                    .into_iter()
+                    .next()
+            })
+            .unwrap_or_else(|| body.clone());
 
         // Name
         if let Some(rule) = &info_rule.name {
-            book.name = self.executor.get_string(rule, &body, Some(base_url));
+            book.name = self.executor.get_string(rule, &rule_body, Some(base_url));
         }
         // Author
         if let Some(rule) = &info_rule.author {
-            book.author = self.executor.get_string(rule, &body, Some(base_url));
+            book.author = self.executor.get_string(rule, &rule_body, Some(base_url));
         }
         // Intro
         if let Some(rule) = &info_rule.intro {
-            let text = self.executor.get_string(rule, &body, Some(base_url));
+            let text = self.executor.get_string(rule, &rule_body, Some(base_url));
             book.intro = if text.is_empty() { None } else { Some(text) };
         }
         // Kind
         if let Some(rule) = &info_rule.kind {
-            let list = self.executor.get_string_list(rule, &body, Some(base_url));
-            book.kind = if list.is_empty() { None } else { Some(list.join(",")) };
+            let list = self
+                .executor
+                .get_string_list(rule, &rule_body, Some(base_url));
+            book.kind = if list.is_empty() {
+                None
+            } else {
+                Some(list.join(","))
+            };
         }
         // Cover URL
         if let Some(rule) = &info_rule.cover_url {
-            let url = self.executor.get_string(rule, &body, Some(base_url));
-            book.cover_url = if url.is_empty() { None } else { Some(Self::resolve_url(&url, base_url)) };
+            let url = self.executor.get_string(rule, &rule_body, Some(base_url));
+            book.cover_url = if url.is_empty() {
+                None
+            } else {
+                Some(Self::resolve_url(&url, base_url))
+            };
         }
         // TOC URL
         if let Some(rule) = &info_rule.toc_url {
-            let url = self.executor.get_string(rule, &body, Some(base_url));
-            book.toc_url = if url.is_empty() { book_url.clone() } else { Self::resolve_url(&url, base_url) };
+            let url = self.executor.get_string(rule, &rule_body, Some(base_url));
+            book.toc_url = if url.is_empty() {
+                book_url.clone()
+            } else {
+                Self::resolve_url(&url, base_url)
+            };
         } else {
             book.toc_url = book_url.clone();
         }
         // Last chapter
         if let Some(rule) = &info_rule.last_chapter {
-            let text = self.executor.get_string(rule, &body, Some(base_url));
+            let text = self.executor.get_string(rule, &rule_body, Some(base_url));
             book.latest_chapter_title = if text.is_empty() { None } else { Some(text) };
         }
         // Word count
         if let Some(rule) = &info_rule.word_count {
-            let text = self.executor.get_string(rule, &body, Some(base_url));
+            let text = self.executor.get_string(rule, &rule_body, Some(base_url));
             book.word_count = if text.is_empty() { None } else { Some(text) };
         }
 
@@ -456,22 +562,23 @@ impl WebBook {
         let analyze_url = AnalyzeUrl::new(
             toc_url,
             Some(&book.book_url),
-            None, None,
+            None,
+            None,
             self.js_state.clone(),
         );
 
-        let body = analyze_url.get_str_response()
+        let body = analyze_url
+            .get_str_response()
             .map_err(|e| WebBookError::Request(e.to_string()))?;
 
         let toc_rule: TocRule = if let Some(rule_json) = &source.rule_toc {
             serde_json::from_str(rule_json)
-                .unwrap_or_default()
+                .map_err(|e| WebBookError::RuleParse(format!("Failed to parse toc rule: {}", e)))?
         } else {
             return Ok(Vec::new());
         };
 
-        let chapter_list_rule = toc_rule.chapter_list.as_deref()
-            .unwrap_or("");
+        let chapter_list_rule = toc_rule.chapter_list.as_deref().unwrap_or("");
 
         if chapter_list_rule.is_empty() {
             return Ok(Vec::new());
@@ -489,7 +596,9 @@ impl WebBook {
 
             // Chapter name
             if let Some(rule) = &toc_rule.chapter_name {
-                chapter.title = self.executor.get_string(rule, &element_html, Some(base_url));
+                chapter.title = self
+                    .executor
+                    .get_string(rule, &element_html, Some(base_url));
             }
             if chapter.title.is_empty() {
                 continue;
@@ -497,7 +606,9 @@ impl WebBook {
 
             // Chapter URL
             if let Some(rule) = &toc_rule.chapter_url {
-                let url = self.executor.get_string(rule, &element_html, Some(base_url));
+                let url = self
+                    .executor
+                    .get_string(rule, &element_html, Some(base_url));
                 chapter.url = Self::resolve_url(&url, base_url);
             }
             if chapter.url.is_empty() {
@@ -521,14 +632,14 @@ impl WebBook {
         chapter: &BookChapter,
     ) -> Result<String, WebBookError> {
         let content_rule: ContentRule = if let Some(rule_json) = &source.rule_content {
-            serde_json::from_str(rule_json)
-                .unwrap_or_default()
+            serde_json::from_str(rule_json).map_err(|e| {
+                WebBookError::RuleParse(format!("Failed to parse content rule: {}", e))
+            })?
         } else {
             return Ok(String::new());
         };
 
-        let content_rule_str = content_rule.content.as_deref()
-            .unwrap_or("");
+        let content_rule_str = content_rule.content.as_deref().unwrap_or("");
 
         if content_rule_str.is_empty() {
             return Ok(chapter.url.clone());
@@ -537,15 +648,19 @@ impl WebBook {
         let analyze_url = AnalyzeUrl::new(
             &chapter.url,
             Some(&book.toc_url),
-            None, None,
+            None,
+            None,
             self.js_state.clone(),
         );
 
-        let body = analyze_url.get_str_response()
+        let body = analyze_url
+            .get_str_response()
             .map_err(|e| WebBookError::Request(e.to_string()))?;
 
         let base_url = &analyze_url.params.base_url;
-        let content = self.executor.get_string(content_rule_str, &body, Some(base_url));
+        let content = self
+            .executor
+            .get_string(content_rule_str, &body, Some(base_url));
 
         Ok(content)
     }
@@ -577,4 +692,6 @@ pub enum WebBookError {
     Request(String),
     #[error("Parse error: {0}")]
     Parse(String),
+    #[error("Rule parse error: {0}")]
+    RuleParse(String),
 }

@@ -1,6 +1,10 @@
-use rusqlite::{params, Result, Row};
-use super::models::{Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource, RssStar, RuleSub, SearchKeyword, Server, TxtTocRule};
+use super::models::{
+    Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItem, ExploreItemsPage,
+    HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource,
+    RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
+};
 use super::Database;
+use rusqlite::{params, Connection, Result, Row};
 
 /// Book data access object
 pub struct BookDao<'a> {
@@ -12,9 +16,9 @@ impl<'a> BookDao<'a> {
         Self { db }
     }
 
-    /// Insert a book
-    pub fn insert(&self, book: &Book) -> Result<()> {
-        self.db.conn().execute(
+    /// Insert a book using a provided connection (for transactions)
+    pub fn insert_conn(&self, conn: &Connection, book: &Book) -> Result<()> {
+        conn.execute(
             r#"INSERT INTO books (
                 bookUrl, tocUrl, origin, originName, name, author, kind, customTag,
                 coverUrl, customCoverUrl, intro, customIntro, charset, type, "group",
@@ -37,9 +41,14 @@ impl<'a> BookDao<'a> {
         Ok(())
     }
 
-    /// Update a book
-    pub fn update(&self, book: &Book) -> Result<()> {
-        self.db.conn().execute(
+    /// Insert a book
+    pub fn insert(&self, book: &Book) -> Result<()> {
+        self.insert_conn(&self.db.conn(), book)
+    }
+
+    /// Update a book using a provided connection (for transactions)
+    pub fn update_conn(&self, conn: &Connection, book: &Book) -> Result<()> {
+        conn.execute(
             r#"UPDATE books SET
                 tocUrl = ?2, origin = ?3, originName = ?4, name = ?5, author = ?6,
                 kind = ?7, customTag = ?8, coverUrl = ?9, customCoverUrl = ?10,
@@ -51,24 +60,80 @@ impl<'a> BookDao<'a> {
                 variable = ?29, readConfig = ?30, syncTime = ?31
             WHERE bookUrl = ?1"#,
             params![
-                book.book_url, book.toc_url, book.origin, book.origin_name, book.name, book.author,
-                book.kind, book.custom_tag, book.cover_url, book.custom_cover_url, book.intro,
-                book.custom_intro, book.charset, book.book_type, book.group, book.latest_chapter_title,
-                book.latest_chapter_time, book.last_check_time, book.last_check_count, book.total_chapter_num,
-                book.dur_chapter_title, book.dur_chapter_index, book.dur_chapter_pos, book.dur_chapter_time,
-                book.word_count, book.can_update as i32, book.order, book.origin_order, book.variable,
-                book.read_config, book.sync_time
+                book.book_url,
+                book.toc_url,
+                book.origin,
+                book.origin_name,
+                book.name,
+                book.author,
+                book.kind,
+                book.custom_tag,
+                book.cover_url,
+                book.custom_cover_url,
+                book.intro,
+                book.custom_intro,
+                book.charset,
+                book.book_type,
+                book.group,
+                book.latest_chapter_title,
+                book.latest_chapter_time,
+                book.last_check_time,
+                book.last_check_count,
+                book.total_chapter_num,
+                book.dur_chapter_title,
+                book.dur_chapter_index,
+                book.dur_chapter_pos,
+                book.dur_chapter_time,
+                book.word_count,
+                book.can_update as i32,
+                book.order,
+                book.origin_order,
+                book.variable,
+                book.read_config,
+                book.sync_time
             ],
         )?;
         Ok(())
     }
 
-    /// Delete a book by URL
+    /// Update a book
+    pub fn update(&self, book: &Book) -> Result<()> {
+        self.update_conn(&self.db.conn(), book)
+    }
+
+    /// Delete a book by URL, cascading to related records
     pub fn delete(&self, book_url: &str) -> Result<()> {
-        self.db.conn().execute(
-            "DELETE FROM books WHERE bookUrl = ?1",
+        let mut conn = self.db.conn();
+        let tx = conn.transaction()?;
+
+        // Get book name for read_records cleanup
+        let book_name: Option<String> = {
+            let mut stmt = tx.prepare("SELECT name FROM books WHERE bookUrl = ?1")?;
+            let mut rows = stmt.query(params![book_url])?;
+            rows.next()?.and_then(|r| r.get(0).ok())
+        };
+
+        tx.execute(
+            "DELETE FROM book_chapters WHERE bookUrl = ?1",
             params![book_url],
         )?;
+        tx.execute(
+            "DELETE FROM bookmarks WHERE bookUrl = ?1",
+            params![book_url],
+        )?;
+        tx.execute(
+            "DELETE FROM chapter_contents WHERE bookUrl = ?1",
+            params![book_url],
+        )?;
+        if let Some(ref name) = book_name {
+            tx.execute(
+                "DELETE FROM read_records WHERE bookName = ?1",
+                params![name],
+            )?;
+        }
+        tx.execute("DELETE FROM books WHERE bookUrl = ?1", params![book_url])?;
+
+        tx.commit()?;
         Ok(())
     }
 
@@ -96,7 +161,8 @@ impl<'a> BookDao<'a> {
     /// Get books by group
     pub fn get_by_group(&self, group_id: i64) -> Result<Vec<Book>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM books WHERE \"group\" = ?1 ORDER BY \"order\"")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM books WHERE \"group\" = ?1 ORDER BY \"order\"")?;
         let rows = stmt.query_map(params![group_id], Self::row_to_book)?;
         rows.collect()
     }
@@ -235,9 +301,108 @@ impl<'a> BookSourceDao<'a> {
 
     pub fn get_enabled(&self) -> Result<Vec<BookSource>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_source)?;
         rows.collect()
+    }
+
+    pub fn get_explore_enabled(&self) -> Result<Vec<BookSource>> {
+        let conn = self.db.conn();
+        let mut stmt = conn.prepare(
+            "SELECT * FROM book_sources
+             WHERE enabledExplore = 1
+               AND exploreUrl IS NOT NULL
+               AND trim(exploreUrl) <> ''
+             ORDER BY customOrder",
+        )?;
+        let rows = stmt.query_map([], Self::row_to_source)?;
+        rows.collect()
+    }
+
+    pub fn get_explore_items(
+        &self,
+        offset: usize,
+        limit: usize,
+        filter: Option<&str>,
+    ) -> Result<ExploreItemsPage> {
+        let conn = self.db.conn();
+        let mut stmt = conn.prepare(
+            "SELECT bookSourceUrl, bookSourceName, exploreUrl FROM book_sources
+             WHERE enabledExplore = 1
+               AND exploreUrl IS NOT NULL
+               AND trim(exploreUrl) <> ''
+             ORDER BY customOrder",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>("bookSourceUrl")?,
+                row.get::<_, String>("bookSourceName")?,
+                row.get::<_, Option<String>>("exploreUrl")?,
+            ))
+        })?;
+
+        let filter = filter
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_lowercase());
+        let mut total = 0usize;
+        let mut item_index = 0usize;
+        let mut items = Vec::with_capacity(limit.min(128));
+
+        for row in rows {
+            let (source_url, source_name, explore_url) = row?;
+            let source_name_lc = source_name.to_lowercase();
+            let Some(explore_url) = explore_url else {
+                continue;
+            };
+
+            for line in explore_url.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                let id = format!("{}|{}", source_url, item_index);
+                item_index += 1;
+
+                let (label, url) = if let Some((label, url)) = trimmed.split_once("::") {
+                    let label = label.trim();
+                    let label = if label.is_empty() {
+                        source_name.clone()
+                    } else {
+                        label.to_string()
+                    };
+                    (label, url.trim().to_string())
+                } else {
+                    (source_name.clone(), trimmed.to_string())
+                };
+
+                if url.is_empty() {
+                    continue;
+                }
+
+                if let Some(filter) = &filter {
+                    let label_lc = label.to_lowercase();
+                    if !label_lc.contains(filter) && !source_name_lc.contains(filter) {
+                        continue;
+                    }
+                }
+
+                if total >= offset && items.len() < limit {
+                    items.push(ExploreItem {
+                        id,
+                        source_url: source_url.clone(),
+                        source_name: source_name.clone(),
+                        label,
+                        url,
+                    });
+                }
+                total += 1;
+            }
+        }
+
+        Ok(ExploreItemsPage { items, total })
     }
 
     pub fn exists(&self, url: &str) -> Result<bool> {
@@ -305,32 +470,52 @@ impl<'a> BookChapterDao<'a> {
                 startFragmentId, endFragmentId, tag, wordCount
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
             params![
-                chapter.url, chapter.book_url, chapter.index, chapter.title,
-                chapter.is_volume as i32, chapter.is_vip as i32, chapter.is_pay as i32,
-                chapter.start_fragment_id, chapter.end_fragment_id, chapter.tag, chapter.word_count
+                chapter.url,
+                chapter.book_url,
+                chapter.index,
+                chapter.title,
+                chapter.is_volume as i32,
+                chapter.is_vip as i32,
+                chapter.is_pay as i32,
+                chapter.start_fragment_id,
+                chapter.end_fragment_id,
+                chapter.tag,
+                chapter.word_count
             ],
         )?;
+        Ok(())
+    }
+
+    /// Insert many chapters using a provided connection (for transactions)
+    pub fn insert_many_conn(&self, conn: &Connection, chapters: &[BookChapter]) -> Result<()> {
+        let mut stmt = conn.prepare(
+            r#"INSERT INTO book_chapters (
+                url, bookUrl, "index", title, isVolume, isVip, isPay,
+                startFragmentId, endFragmentId, tag, wordCount
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+        )?;
+        for chapter in chapters {
+            stmt.execute(params![
+                chapter.url,
+                chapter.book_url,
+                chapter.index,
+                chapter.title,
+                chapter.is_volume as i32,
+                chapter.is_vip as i32,
+                chapter.is_pay as i32,
+                chapter.start_fragment_id,
+                chapter.end_fragment_id,
+                chapter.tag,
+                chapter.word_count
+            ])?;
+        }
         Ok(())
     }
 
     pub fn insert_many(&self, chapters: &[BookChapter]) -> Result<()> {
         let mut conn = self.db.conn();
         let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare(
-                r#"INSERT INTO book_chapters (
-                    url, bookUrl, "index", title, isVolume, isVip, isPay,
-                    startFragmentId, endFragmentId, tag, wordCount
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
-            )?;
-            for chapter in chapters {
-                stmt.execute(params![
-                    chapter.url, chapter.book_url, chapter.index, chapter.title,
-                    chapter.is_volume as i32, chapter.is_vip as i32, chapter.is_pay as i32,
-                    chapter.start_fragment_id, chapter.end_fragment_id, chapter.tag, chapter.word_count
-                ])?;
-            }
-        }
+        self.insert_many_conn(&tx, chapters)?;
         tx.commit()?;
         Ok(())
     }
@@ -345,18 +530,16 @@ impl<'a> BookChapterDao<'a> {
 
     pub fn get_chapters(&self, book_url: &str) -> Result<Vec<BookChapter>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare(
-            "SELECT * FROM book_chapters WHERE bookUrl = ?1 ORDER BY \"index\""
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM book_chapters WHERE bookUrl = ?1 ORDER BY \"index\"")?;
         let rows = stmt.query_map(params![book_url], Self::row_to_chapter)?;
         rows.collect()
     }
 
     pub fn get_chapter(&self, book_url: &str, index: i32) -> Result<Option<BookChapter>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare(
-            "SELECT * FROM book_chapters WHERE bookUrl = ?1 AND \"index\" = ?2"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM book_chapters WHERE bookUrl = ?1 AND \"index\" = ?2")?;
         let mut rows = stmt.query(params![book_url, index])?;
         if let Some(row) = rows.next()? {
             Ok(Some(Self::row_to_chapter(row)?))
@@ -410,8 +593,11 @@ impl<'a> BookGroupDao<'a> {
                 groupId, groupName, "order", show, enableRefresh
             ) VALUES (?1, ?2, ?3, ?4, ?5)"#,
             params![
-                group.group_id, group.group_name, group.order,
-                group.show as i32, group.enable_refresh as i32
+                group.group_id,
+                group.group_name,
+                group.order,
+                group.show as i32,
+                group.enable_refresh as i32
             ],
         )?;
         Ok(())
@@ -423,8 +609,11 @@ impl<'a> BookGroupDao<'a> {
                 groupName = ?2, "order" = ?3, show = ?4, enableRefresh = ?5
             WHERE groupId = ?1"#,
             params![
-                group.group_id, group.group_name, group.order,
-                group.show as i32, group.enable_refresh as i32
+                group.group_id,
+                group.group_name,
+                group.order,
+                group.show as i32,
+                group.enable_refresh as i32
             ],
         )?;
         Ok(())
@@ -458,7 +647,8 @@ impl<'a> BookGroupDao<'a> {
 
     pub fn get_visible(&self) -> Result<Vec<BookGroup>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM book_groups WHERE show = 1 ORDER BY \"order\"")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM book_groups WHERE show = 1 ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_group)?;
         rows.collect()
     }
@@ -493,33 +683,45 @@ impl<'a> ReplaceRuleDao<'a> {
                 name, pattern, replacement, scope, isRegex, enabled, "order"
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
             params![
-                rule.name, rule.pattern, rule.replacement, rule.scope,
-                rule.is_regex as i32, rule.enabled as i32, rule.order
+                rule.name,
+                rule.pattern,
+                rule.replacement,
+                rule.scope,
+                rule.is_regex as i32,
+                rule.enabled as i32,
+                rule.order
             ],
         )?;
         Ok(self.db.conn().last_insert_rowid())
     }
 
     pub fn update(&self, rule: &ReplaceRule) -> Result<()> {
-        let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName("id is required for update".to_string()))?;
+        let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required for update".to_string(),
+        ))?;
         self.db.conn().execute(
             r#"UPDATE replace_rules SET
                 name = ?2, pattern = ?3, replacement = ?4, scope = ?5,
                 isRegex = ?6, enabled = ?7, "order" = ?8
             WHERE id = ?1"#,
             params![
-                id, rule.name, rule.pattern, rule.replacement, rule.scope,
-                rule.is_regex as i32, rule.enabled as i32, rule.order
+                id,
+                rule.name,
+                rule.pattern,
+                rule.replacement,
+                rule.scope,
+                rule.is_regex as i32,
+                rule.enabled as i32,
+                rule.order
             ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute(
-            "DELETE FROM replace_rules WHERE id = ?1",
-            params![id],
-        )?;
+        self.db
+            .conn()
+            .execute("DELETE FROM replace_rules WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -543,7 +745,8 @@ impl<'a> ReplaceRuleDao<'a> {
 
     pub fn get_enabled(&self) -> Result<Vec<ReplaceRule>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM replace_rules WHERE enabled = 1 ORDER BY \"order\"")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM replace_rules WHERE enabled = 1 ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
         rows.collect()
     }
@@ -602,27 +805,24 @@ impl<'a> SearchKeywordDao<'a> {
 
     pub fn get_recent(&self, limit: i64) -> Result<Vec<SearchKeyword>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare(
-            "SELECT * FROM search_keywords ORDER BY lastUseTime DESC LIMIT ?1"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM search_keywords ORDER BY lastUseTime DESC LIMIT ?1")?;
         let rows = stmt.query_map(params![limit], Self::row_to_keyword)?;
         rows.collect()
     }
 
     pub fn get_popular(&self, limit: i64) -> Result<Vec<SearchKeyword>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare(
-            "SELECT * FROM search_keywords ORDER BY usageCount DESC LIMIT ?1"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM search_keywords ORDER BY usageCount DESC LIMIT ?1")?;
         let rows = stmt.query_map(params![limit], Self::row_to_keyword)?;
         rows.collect()
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute(
-            "DELETE FROM search_keywords WHERE id = ?1",
-            params![id],
-        )?;
+        self.db
+            .conn()
+            .execute("DELETE FROM search_keywords WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -675,10 +875,9 @@ impl<'a> CookieDao<'a> {
     }
 
     pub fn delete(&self, url: &str) -> Result<()> {
-        self.db.conn().execute(
-            "DELETE FROM cookies WHERE url = ?1",
-            params![url],
-        )?;
+        self.db
+            .conn()
+            .execute("DELETE FROM cookies WHERE url = ?1", params![url])?;
         Ok(())
     }
 
@@ -718,7 +917,7 @@ impl<'a> CacheDao<'a> {
 
         let conn = self.db.conn();
         let mut stmt = conn.prepare(
-            "SELECT value FROM caches WHERE \"key\" = ?1 AND (deadline = 0 OR deadline > ?2)"
+            "SELECT value FROM caches WHERE \"key\" = ?1 AND (deadline = 0 OR deadline > ?2)",
         )?;
         let mut rows = stmt.query(params![key, now])?;
         if let Some(row) = rows.next()? {
@@ -729,10 +928,9 @@ impl<'a> CacheDao<'a> {
     }
 
     pub fn delete(&self, key: &str) -> Result<()> {
-        self.db.conn().execute(
-            "DELETE FROM caches WHERE \"key\" = ?1",
-            params![key],
-        )?;
+        self.db
+            .conn()
+            .execute("DELETE FROM caches WHERE \"key\" = ?1", params![key])?;
         Ok(())
     }
 
@@ -775,16 +973,23 @@ impl<'a> BookmarkDao<'a> {
                 chapterIndex, pageIndex, content
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
             params![
-                bookmark.book_name, bookmark.book_author, bookmark.chapter_name,
-                bookmark.book_url, bookmark.chapter_url, bookmark.chapter_index,
-                bookmark.page_index, bookmark.content
+                bookmark.book_name,
+                bookmark.book_author,
+                bookmark.chapter_name,
+                bookmark.book_url,
+                bookmark.chapter_url,
+                bookmark.chapter_index,
+                bookmark.page_index,
+                bookmark.content
             ],
         )?;
         Ok(self.db.conn().last_insert_rowid())
     }
 
     pub fn update(&self, bookmark: &Bookmark) -> Result<()> {
-        let id = bookmark.id.ok_or(rusqlite::Error::InvalidParameterName("id is required".to_string()))?;
+        let id = bookmark.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required".to_string(),
+        ))?;
         self.db.conn().execute(
             r#"UPDATE bookmarks SET
                 bookName = ?2, bookAuthor = ?3, chapterName = ?4,
@@ -792,27 +997,39 @@ impl<'a> BookmarkDao<'a> {
                 pageIndex = ?8, content = ?9
             WHERE id = ?1"#,
             params![
-                id, bookmark.book_name, bookmark.book_author, bookmark.chapter_name,
-                bookmark.book_url, bookmark.chapter_url, bookmark.chapter_index,
-                bookmark.page_index, bookmark.content
+                id,
+                bookmark.book_name,
+                bookmark.book_author,
+                bookmark.chapter_name,
+                bookmark.book_url,
+                bookmark.chapter_url,
+                bookmark.chapter_index,
+                bookmark.page_index,
+                bookmark.content
             ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
+        self.db
+            .conn()
+            .execute("DELETE FROM bookmarks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn delete_by_book(&self, book_url: &str) -> Result<()> {
         self.db.conn().execute(
-            "DELETE FROM bookmarks WHERE id = ?1",
-            params![id],
+            "DELETE FROM bookmarks WHERE bookUrl = ?1",
+            params![book_url],
         )?;
         Ok(())
     }
 
     pub fn get_by_book(&self, book_url: &str) -> Result<Vec<Bookmark>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare(
-            "SELECT * FROM bookmarks WHERE bookUrl = ?1 ORDER BY chapterIndex"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM bookmarks WHERE bookUrl = ?1 ORDER BY chapterIndex")?;
         let rows = stmt.query_map(params![book_url], Self::row_to_bookmark)?;
         rows.collect()
     }
@@ -918,30 +1135,49 @@ impl<'a> HttpTTSDao<'a> {
                 enabled, concurrentRate, lastUpdateTime
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
             params![
-                tts.name, tts.url, tts.content_type, tts.login_url, tts.login_ui,
-                tts.header, tts.enabled as i32, tts.concurrent_rate, tts.last_update_time
+                tts.name,
+                tts.url,
+                tts.content_type,
+                tts.login_url,
+                tts.login_ui,
+                tts.header,
+                tts.enabled as i32,
+                tts.concurrent_rate,
+                tts.last_update_time
             ],
         )?;
         Ok(self.db.conn().last_insert_rowid())
     }
 
     pub fn update(&self, tts: &HttpTTS) -> Result<()> {
-        let id = tts.id.ok_or(rusqlite::Error::InvalidParameterName("id is required".to_string()))?;
+        let id = tts.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required".to_string(),
+        ))?;
         self.db.conn().execute(
             r#"UPDATE http_tts SET
                 name = ?2, url = ?3, contentType = ?4, loginUrl = ?5, loginUi = ?6,
                 header = ?7, enabled = ?8, concurrentRate = ?9, lastUpdateTime = ?10
             WHERE id = ?1"#,
             params![
-                id, tts.name, tts.url, tts.content_type, tts.login_url, tts.login_ui,
-                tts.header, tts.enabled as i32, tts.concurrent_rate, tts.last_update_time
+                id,
+                tts.name,
+                tts.url,
+                tts.content_type,
+                tts.login_url,
+                tts.login_ui,
+                tts.header,
+                tts.enabled as i32,
+                tts.concurrent_rate,
+                tts.last_update_time
             ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM http_tts WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM http_tts WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1005,14 +1241,15 @@ impl<'a> RssSourceDao<'a> {
                 sourceUrl, sourceName, sourceGroup, sourceIcon, enabled, variable,
                 customOrder, lastUpdateTime, loginUrl, loginUi, header, sortUrl,
                 ruleArticles, ruleNextPage, ruleTitle, rulePubDate, ruleDescription,
-                ruleImage, ruleLink, ruleContent
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)"#,
+                ruleImage, ruleLink, ruleContent, singleUrl
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)"#,
             params![
                 source.source_url, source.source_name, source.source_group, source.source_icon,
                 source.enabled as i32, source.variable, source.custom_order, source.last_update_time,
                 source.login_url, source.login_ui, source.header, source.sort_url,
                 source.rule_articles, source.rule_next_page, source.rule_title, source.rule_pub_date,
-                source.rule_description, source.rule_image, source.rule_link, source.rule_content
+                source.rule_description, source.rule_image, source.rule_link, source.rule_content,
+                source.single_url as i32
             ],
         )?;
         Ok(())
@@ -1025,21 +1262,24 @@ impl<'a> RssSourceDao<'a> {
                 variable = ?6, customOrder = ?7, lastUpdateTime = ?8, loginUrl = ?9,
                 loginUi = ?10, header = ?11, sortUrl = ?12, ruleArticles = ?13,
                 ruleNextPage = ?14, ruleTitle = ?15, rulePubDate = ?16,
-                ruleDescription = ?17, ruleImage = ?18, ruleLink = ?19, ruleContent = ?20
+                ruleDescription = ?17, ruleImage = ?18, ruleLink = ?19, ruleContent = ?20, singleUrl = ?21
             WHERE sourceUrl = ?1"#,
             params![
                 source.source_url, source.source_name, source.source_group, source.source_icon,
                 source.enabled as i32, source.variable, source.custom_order, source.last_update_time,
                 source.login_url, source.login_ui, source.header, source.sort_url,
                 source.rule_articles, source.rule_next_page, source.rule_title, source.rule_pub_date,
-                source.rule_description, source.rule_image, source.rule_link, source.rule_content
+                source.rule_description, source.rule_image, source.rule_link, source.rule_content,
+                source.single_url as i32
             ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, url: &str) -> Result<()> {
-        self.db.conn().execute("DELETE FROM rss_sources WHERE sourceUrl = ?1", params![url])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM rss_sources WHERE sourceUrl = ?1", params![url])?;
         Ok(())
     }
 
@@ -1063,7 +1303,8 @@ impl<'a> RssSourceDao<'a> {
 
     pub fn get_enabled(&self) -> Result<Vec<RssSource>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM rss_sources WHERE enabled = 1 ORDER BY customOrder")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM rss_sources WHERE enabled = 1 ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_source)?;
         rows.collect()
     }
@@ -1090,6 +1331,7 @@ impl<'a> RssSourceDao<'a> {
             rule_image: row.get("ruleImage").ok(),
             rule_link: row.get("ruleLink").ok(),
             rule_content: row.get("ruleContent").ok(),
+            single_url: row.get::<_, i32>("singleUrl").unwrap_or(0) != 0,
         })
     }
 }
@@ -1113,8 +1355,14 @@ impl<'a> RssArticleDao<'a> {
                 origin, sort, title, content, description, link, pubDate, variable
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
             params![
-                article.origin, article.sort, article.title, article.content,
-                article.description, article.link, article.pub_date, article.variable
+                article.origin,
+                article.sort,
+                article.title,
+                article.content,
+                article.description,
+                article.link,
+                article.pub_date,
+                article.variable
             ],
         )?;
         Ok(self.db.conn().last_insert_rowid())
@@ -1127,12 +1375,18 @@ impl<'a> RssArticleDao<'a> {
             let mut stmt = tx.prepare(
                 r#"INSERT INTO rss_articles (
                     origin, sort, title, content, description, link, pubDate, variable
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
             )?;
             for article in articles {
                 stmt.execute(params![
-                    article.origin, article.sort, article.title, article.content,
-                    article.description, article.link, article.pub_date, article.variable
+                    article.origin,
+                    article.sort,
+                    article.title,
+                    article.content,
+                    article.description,
+                    article.link,
+                    article.pub_date,
+                    article.variable
                 ])?;
             }
         }
@@ -1141,13 +1395,17 @@ impl<'a> RssArticleDao<'a> {
     }
 
     pub fn delete_by_origin(&self, origin: &str) -> Result<()> {
-        self.db.conn().execute("DELETE FROM rss_articles WHERE origin = ?1", params![origin])?;
+        self.db.conn().execute(
+            "DELETE FROM rss_articles WHERE origin = ?1",
+            params![origin],
+        )?;
         Ok(())
     }
 
     pub fn get_by_origin(&self, origin: &str) -> Result<Vec<RssArticle>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM rss_articles WHERE origin = ?1 ORDER BY id DESC")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM rss_articles WHERE origin = ?1 ORDER BY id DESC")?;
         let rows = stmt.query_map(params![origin], Self::row_to_article)?;
         rows.collect()
     }
@@ -1197,7 +1455,9 @@ impl<'a> TxtTocRuleDao<'a> {
     }
 
     pub fn update(&self, rule: &TxtTocRule) -> Result<()> {
-        let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName("id is required".to_string()))?;
+        let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required".to_string(),
+        ))?;
         self.db.conn().execute(
             r#"UPDATE txt_toc_rules SET name = ?2, rule = ?3, enabled = ?4, "order" = ?5
                WHERE id = ?1"#,
@@ -1207,7 +1467,9 @@ impl<'a> TxtTocRuleDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM txt_toc_rules WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM txt_toc_rules WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1220,7 +1482,8 @@ impl<'a> TxtTocRuleDao<'a> {
 
     pub fn get_enabled(&self) -> Result<Vec<TxtTocRule>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM txt_toc_rules WHERE enabled = 1 ORDER BY \"order\"")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM txt_toc_rules WHERE enabled = 1 ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
         rows.collect()
     }
@@ -1255,30 +1518,45 @@ impl<'a> RuleSubDao<'a> {
                 name, url, type, customOrder, enabled, autoUpdate, lastUpdateTime
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
             params![
-                sub.name, sub.url, sub.sub_type, sub.custom_order,
-                sub.enabled as i32, sub.auto_update as i32, sub.last_update_time
+                sub.name,
+                sub.url,
+                sub.sub_type,
+                sub.custom_order,
+                sub.enabled as i32,
+                sub.auto_update as i32,
+                sub.last_update_time
             ],
         )?;
         Ok(self.db.conn().last_insert_rowid())
     }
 
     pub fn update(&self, sub: &RuleSub) -> Result<()> {
-        let id = sub.id.ok_or(rusqlite::Error::InvalidParameterName("id is required".to_string()))?;
+        let id = sub.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required".to_string(),
+        ))?;
         self.db.conn().execute(
             r#"UPDATE rule_subs SET
                 name = ?2, url = ?3, type = ?4, customOrder = ?5,
                 enabled = ?6, autoUpdate = ?7, lastUpdateTime = ?8
             WHERE id = ?1"#,
             params![
-                id, sub.name, sub.url, sub.sub_type, sub.custom_order,
-                sub.enabled as i32, sub.auto_update as i32, sub.last_update_time
+                id,
+                sub.name,
+                sub.url,
+                sub.sub_type,
+                sub.custom_order,
+                sub.enabled as i32,
+                sub.auto_update as i32,
+                sub.last_update_time
             ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM rule_subs WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM rule_subs WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1291,7 +1569,8 @@ impl<'a> RuleSubDao<'a> {
 
     pub fn get_enabled(&self) -> Result<Vec<RuleSub>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM rule_subs WHERE enabled = 1 ORDER BY customOrder")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM rule_subs WHERE enabled = 1 ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_sub)?;
         rows.collect()
     }
@@ -1332,7 +1611,9 @@ impl<'a> DictRuleDao<'a> {
     }
 
     pub fn update(&self, rule: &DictRule) -> Result<()> {
-        let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName("id is required".to_string()))?;
+        let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required".to_string(),
+        ))?;
         self.db.conn().execute(
             "UPDATE dict_rules SET name = ?2, url = ?3, enabled = ?4 WHERE id = ?1",
             params![id, rule.name, rule.url, rule.enabled as i32],
@@ -1341,7 +1622,9 @@ impl<'a> DictRuleDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM dict_rules WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM dict_rules WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1386,23 +1669,38 @@ impl<'a> KeyboardAssistDao<'a> {
         self.db.conn().execute(
             r#"INSERT INTO keyboard_assists (type, "key", value, serialNo)
                VALUES (?1, ?2, ?3, ?4)"#,
-            params![assist.assist_type, assist.key, assist.value, assist.serial_no],
+            params![
+                assist.assist_type,
+                assist.key,
+                assist.value,
+                assist.serial_no
+            ],
         )?;
         Ok(self.db.conn().last_insert_rowid())
     }
 
     pub fn update(&self, assist: &KeyboardAssist) -> Result<()> {
-        let id = assist.id.ok_or(rusqlite::Error::InvalidParameterName("id is required".to_string()))?;
+        let id = assist.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required".to_string(),
+        ))?;
         self.db.conn().execute(
             r#"UPDATE keyboard_assists SET type = ?2, "key" = ?3, value = ?4, serialNo = ?5
                WHERE id = ?1"#,
-            params![id, assist.assist_type, assist.key, assist.value, assist.serial_no],
+            params![
+                id,
+                assist.assist_type,
+                assist.key,
+                assist.value,
+                assist.serial_no
+            ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM keyboard_assists WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM keyboard_assists WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1446,7 +1744,9 @@ impl<'a> ServerDao<'a> {
     }
 
     pub fn update(&self, server: &Server) -> Result<()> {
-        let id = server.id.ok_or(rusqlite::Error::InvalidParameterName("id is required".to_string()))?;
+        let id = server.id.ok_or(rusqlite::Error::InvalidParameterName(
+            "id is required".to_string(),
+        ))?;
         self.db.conn().execute(
             "UPDATE servers SET name = ?2, url = ?3, enabled = ?4 WHERE id = ?1",
             params![id, server.name, server.url, server.enabled as i32],
@@ -1455,7 +1755,9 @@ impl<'a> ServerDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM servers WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM servers WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1505,7 +1807,9 @@ impl<'a> RssStarDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM rss_stars WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM rss_stars WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -1518,7 +1822,8 @@ impl<'a> RssStarDao<'a> {
 
     pub fn get_by_origin(&self, origin: &str) -> Result<Vec<RssStar>> {
         let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM rss_stars WHERE origin = ?1 ORDER BY id DESC")?;
+        let mut stmt =
+            conn.prepare("SELECT * FROM rss_stars WHERE origin = ?1 ORDER BY id DESC")?;
         let rows = stmt.query_map(params![origin], Self::row_to_star)?;
         rows.collect()
     }
@@ -1565,12 +1870,24 @@ impl<'a> RssReadRecordDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db.conn().execute("DELETE FROM rss_read_records WHERE id = ?1", params![id])?;
+        self.db
+            .conn()
+            .execute("DELETE FROM rss_read_records WHERE id = ?1", params![id])?;
         Ok(())
     }
 
+    pub fn get_read_article_ids(&self, origin: &str) -> Result<Vec<i32>> {
+        let conn = self.db.conn();
+        let mut stmt = conn.prepare("SELECT articleId FROM rss_read_records WHERE origin = ?1")?;
+        let rows = stmt.query_map(params![origin], |row| row.get(0))?;
+        rows.collect()
+    }
+
     pub fn clear_by_origin(&self, origin: &str) -> Result<()> {
-        self.db.conn().execute("DELETE FROM rss_read_records WHERE origin = ?1", params![origin])?;
+        self.db.conn().execute(
+            "DELETE FROM rss_read_records WHERE origin = ?1",
+            params![origin],
+        )?;
         Ok(())
     }
 }
@@ -1588,14 +1905,16 @@ impl<'a> ChapterContentDao<'a> {
         Self { db }
     }
 
-    /// Save or update chapter content
-    pub fn save(&self, book_url: &str, chapter_index: i32, content: &str) -> Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-
-        self.db.conn().execute(
+    /// Save or update chapter content using a provided connection (for transactions)
+    pub fn save_conn(
+        &self,
+        conn: &Connection,
+        book_url: &str,
+        chapter_index: i32,
+        content: &str,
+        now: i64,
+    ) -> Result<()> {
+        conn.execute(
             r#"INSERT INTO chapter_contents (bookUrl, chapterIndex, content, updateTime)
                VALUES (?1, ?2, ?3, ?4)
                ON CONFLICT(bookUrl, chapterIndex) DO UPDATE SET
@@ -1605,11 +1924,20 @@ impl<'a> ChapterContentDao<'a> {
         Ok(())
     }
 
+    /// Save or update chapter content
+    pub fn save(&self, book_url: &str, chapter_index: i32, content: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        self.save_conn(&self.db.conn(), book_url, chapter_index, content, now)
+    }
+
     /// Get chapter content
     pub fn get(&self, book_url: &str, chapter_index: i32) -> Result<Option<String>> {
         let conn = self.db.conn();
         let mut stmt = conn.prepare(
-            "SELECT content FROM chapter_contents WHERE bookUrl = ?1 AND chapterIndex = ?2"
+            "SELECT content FROM chapter_contents WHERE bookUrl = ?1 AND chapterIndex = ?2",
         )?;
         let mut rows = stmt.query(params![book_url, chapter_index])?;
         if let Some(row) = rows.next()? {
@@ -1636,5 +1964,28 @@ impl<'a> ChapterContentDao<'a> {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    /// Batch save chapter contents within a transaction
+    pub fn save_many(&self, entries: &[(String, i32, String)]) -> Result<usize> {
+        let mut conn = self.db.conn();
+        let tx = conn.transaction()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        {
+            let mut stmt = tx.prepare(
+                r#"INSERT INTO chapter_contents (bookUrl, chapterIndex, content, updateTime)
+                   VALUES (?1, ?2, ?3, ?4)
+                   ON CONFLICT(bookUrl, chapterIndex) DO UPDATE SET
+                   content = ?3, updateTime = ?4"#,
+            )?;
+            for (book_url, chapter_index, content) in entries {
+                stmt.execute(params![book_url, chapter_index, content, now])?;
+            }
+        }
+        tx.commit()?;
+        Ok(entries.len())
     }
 }

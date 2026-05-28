@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Book {
     pub book_url: String,
     pub toc_url: String,
@@ -82,6 +83,7 @@ impl Default for Book {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct BookChapter {
     pub url: String,
     pub book_url: String,
@@ -119,6 +121,7 @@ impl Default for BookChapter {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct BookSource {
     pub book_source_url: String,
     pub book_source_name: String,
@@ -150,6 +153,21 @@ pub struct BookSource {
     pub rule_toc: Option<String>,
     pub rule_content: Option<String>,
     pub rule_review: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExploreItem {
+    pub id: String,
+    pub source_url: String,
+    pub source_name: String,
+    pub label: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExploreItemsPage {
+    pub items: Vec<ExploreItem>,
+    pub total: usize,
 }
 
 impl Default for BookSource {
@@ -371,6 +389,7 @@ pub struct HttpTTS {
 // ============================================================================
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct RssSource {
     pub source_url: String,
     pub source_name: String,
@@ -392,6 +411,47 @@ pub struct RssSource {
     pub rule_image: Option<String>,
     pub rule_link: Option<String>,
     pub rule_content: Option<String>,
+    pub single_url: bool,
+}
+
+impl Default for RssSource {
+    fn default() -> Self {
+        Self {
+            source_url: String::new(),
+            source_name: String::new(),
+            source_group: None,
+            source_icon: None,
+            enabled: true,
+            variable: None,
+            custom_order: 0,
+            last_update_time: 0,
+            login_url: None,
+            login_ui: None,
+            header: None,
+            sort_url: None,
+            rule_articles: None,
+            rule_next_page: None,
+            rule_title: None,
+            rule_pub_date: None,
+            rule_description: None,
+            rule_image: None,
+            rule_link: None,
+            rule_content: None,
+            single_url: false,
+        }
+    }
+}
+
+// ============================================================================
+// SourceLink (for parsing special import links from HTML)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SourceLink {
+    pub raw_url: String,
+    pub source_url: String,
+    pub link_type: String,
+    pub label: Option<String>,
 }
 
 // ============================================================================

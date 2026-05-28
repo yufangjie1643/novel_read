@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import type { ApiResponse, BookSource } from "../types";
+import { useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { useTranslation } from 'react-i18next';
+import type { ApiResponse, BookSource } from '../types';
 
 interface DebugResult {
   request_url: string;
@@ -9,19 +10,20 @@ interface DebugResult {
 }
 
 export default function DebugPage() {
+  const { t } = useTranslation();
   const [sources, setSources] = useState<BookSource[]>([]);
-  const [selectedSourceUrl, setSelectedSourceUrl] = useState("");
-  const [step, setStep] = useState("search");
-  const [key, setKey] = useState("");
-  const [bookUrl, setBookUrl] = useState("");
-  const [chapterUrl, setChapterUrl] = useState("");
+  const [selectedSourceUrl, setSelectedSourceUrl] = useState('');
+  const [step, setStep] = useState('search');
+  const [key, setKey] = useState('');
+  const [bookUrl, setBookUrl] = useState('');
+  const [chapterUrl, setChapterUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<DebugResult | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState('');
 
   async function loadSources() {
     try {
-      const resp = await invoke<ApiResponse<BookSource[]>>("get_book_sources");
+      const resp = await invoke<ApiResponse<BookSource[]>>('get_book_sources');
       if (resp.success && resp.data) {
         setSources(resp.data);
         if (resp.data.length > 0 && !selectedSourceUrl) {
@@ -29,180 +31,327 @@ export default function DebugPage() {
         }
       }
     } catch (e) {
-      console.error("Failed to load sources:", e);
+      console.error('Failed to load sources:', e);
     }
   }
 
   async function runDebug() {
     const source = sources.find((s) => s.book_source_url === selectedSourceUrl);
     if (!source) {
-      setError("Please select a source");
+      setError(t('debug.selectSource'));
       return;
     }
 
     setLoading(true);
-    setError("");
+    setError('');
     setResult(null);
 
     try {
-      const resp = await invoke<ApiResponse<DebugResult>>("debug_book_source", {
+      const resp = await invoke<ApiResponse<DebugResult>>('debug_book_source', {
         source,
         step,
         key: key || null,
-        book_url: bookUrl || null,
-        chapter_url: chapterUrl || null,
+        bookUrl: bookUrl || null,
+        chapterUrl: chapterUrl || null,
       });
       if (resp.success && resp.data) {
         setResult(resp.data);
       } else {
-        setError(resp.error || "Debug failed");
+        setError(t('debug.debugFailed', { error: resp.error || '' }));
       }
     } catch (e) {
-      setError(`Error: ${e}`);
+      setError(t('common.error', { message: String(e) }));
     }
     setLoading(false);
   }
 
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '10px 14px',
+    borderRadius: 8,
+    border: '1px solid #e0e0e0',
+    fontSize: 14,
+    outline: 'none',
+    fontFamily: 'inherit',
+    boxSizing: 'border-box',
+  };
+
+  const selectStyle: React.CSSProperties = {
+    ...inputStyle,
+    cursor: 'pointer',
+    background: '#fff',
+  };
+
   return (
     <div>
-      <h2>Source Debug Tool</h2>
+      <h1 style={{ margin: '0 0 20px', fontSize: 24, fontWeight: 700, color: '#1a1a2e' }}>
+        {t('debug.title')}
+      </h1>
 
-      <div style={{ marginBottom: 16 }}>
-        <button onClick={loadSources} disabled={loading}>
-          Load Sources
-        </button>
-      </div>
-
-      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
-        <div>
-          <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>Source:</label>
-          <select
-            value={selectedSourceUrl}
-            onChange={(e) => setSelectedSourceUrl(e.target.value)}
-            style={{ width: "100%", padding: 8 }}
+      <div
+        style={{
+          background: '#fff',
+          borderRadius: 12,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+          padding: 24,
+          marginBottom: 24,
+        }}
+      >
+        <div style={{ marginBottom: 16 }}>
+          <button
+            onClick={loadSources}
+            disabled={loading}
+            style={{
+              padding: '8px 18px',
+              borderRadius: 8,
+              border: '1px solid #bbdefb',
+              background: '#eef4fd',
+              color: '#1976d2',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
           >
-            <option value="">Select a source</option>
-            {sources.map((s) => (
-              <option key={s.book_source_url} value={s.book_source_url}>
-                {s.book_source_name}
-              </option>
-            ))}
-          </select>
+            {t('debug.loadSources')}
+          </button>
         </div>
 
-        <div>
-          <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>Step:</label>
-          <select
-            value={step}
-            onChange={(e) => setStep(e.target.value)}
-            style={{ padding: 8 }}
-          >
-            <option value="search">Search</option>
-            <option value="book_info">Book Info</option>
-            <option value="chapter_list">Chapter List</option>
-            <option value="content">Content</option>
-          </select>
-        </div>
-
-        {step === "search" && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
-            <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>Search Key:</label>
-            <input
-              type="text"
-              value={key}
-              onChange={(e) => setKey(e.target.value)}
-              placeholder="Enter search keyword"
-              style={{ width: "100%", padding: 8 }}
-            />
+            <label
+              style={{
+                display: 'block',
+                fontSize: 14,
+                fontWeight: 600,
+                marginBottom: 6,
+                color: '#333',
+              }}
+            >
+              {t('debug.source')}
+            </label>
+            <select
+              value={selectedSourceUrl}
+              onChange={(e) => setSelectedSourceUrl(e.target.value)}
+              style={selectStyle}
+            >
+              <option value="">{t('debug.selectSource')}</option>
+              {sources.map((s) => (
+                <option key={s.book_source_url} value={s.book_source_url}>
+                  {s.book_source_name}
+                </option>
+              ))}
+            </select>
           </div>
-        )}
 
-        {(step === "book_info" || step === "chapter_list") && (
           <div>
-            <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>Book URL:</label>
-            <input
-              type="text"
-              value={bookUrl}
-              onChange={(e) => setBookUrl(e.target.value)}
-              placeholder="Enter book URL"
-              style={{ width: "100%", padding: 8 }}
-            />
+            <label
+              style={{
+                display: 'block',
+                fontSize: 14,
+                fontWeight: 600,
+                marginBottom: 6,
+                color: '#333',
+              }}
+            >
+              {t('debug.step')}
+            </label>
+            <select
+              value={step}
+              onChange={(e) => setStep(e.target.value)}
+              style={{ ...selectStyle, width: 'auto', minWidth: 180 }}
+            >
+              <option value="search">{t('debug.stepSearch')}</option>
+              <option value="book_info">{t('debug.stepBookInfo')}</option>
+              <option value="chapter_list">{t('debug.stepChapterList')}</option>
+              <option value="content">{t('debug.stepContent')}</option>
+            </select>
           </div>
-        )}
 
-        {step === "content" && (
-          <>
+          {step === 'search' && (
             <div>
-              <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>Book URL:</label>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  marginBottom: 6,
+                  color: '#333',
+                }}
+              >
+                {t('debug.searchKey')}
+              </label>
+              <input
+                type="text"
+                value={key}
+                onChange={(e) => setKey(e.target.value)}
+                placeholder={t('debug.searchKeyPlaceholder')}
+                style={inputStyle}
+              />
+            </div>
+          )}
+
+          {(step === 'book_info' || step === 'chapter_list') && (
+            <div>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  marginBottom: 6,
+                  color: '#333',
+                }}
+              >
+                {t('debug.bookUrl')}
+              </label>
               <input
                 type="text"
                 value={bookUrl}
                 onChange={(e) => setBookUrl(e.target.value)}
-                placeholder="Enter book URL"
-                style={{ width: "100%", padding: 8 }}
+                placeholder={t('debug.bookUrlPlaceholder')}
+                style={inputStyle}
               />
             </div>
-            <div>
-              <label style={{ display: "block", fontSize: 13, marginBottom: 4 }}>Chapter URL:</label>
-              <input
-                type="text"
-                value={chapterUrl}
-                onChange={(e) => setChapterUrl(e.target.value)}
-                placeholder="Enter chapter URL"
-                style={{ width: "100%", padding: 8 }}
-              />
-            </div>
-          </>
-        )}
+          )}
 
-        <button onClick={runDebug} disabled={loading} style={{ padding: "8px 16px" }}>
-          {loading ? "Running..." : "Run Debug"}
-        </button>
+          {step === 'content' && (
+            <>
+              <div>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    marginBottom: 6,
+                    color: '#333',
+                  }}
+                >
+                  {t('debug.bookUrl')}
+                </label>
+                <input
+                  type="text"
+                  value={bookUrl}
+                  onChange={(e) => setBookUrl(e.target.value)}
+                  placeholder={t('debug.bookUrlPlaceholder')}
+                  style={inputStyle}
+                />
+              </div>
+              <div>
+                <label
+                  style={{
+                    display: 'block',
+                    fontSize: 14,
+                    fontWeight: 600,
+                    marginBottom: 6,
+                    color: '#333',
+                  }}
+                >
+                  {t('debug.chapterUrl')}
+                </label>
+                <input
+                  type="text"
+                  value={chapterUrl}
+                  onChange={(e) => setChapterUrl(e.target.value)}
+                  placeholder={t('debug.chapterUrlPlaceholder')}
+                  style={inputStyle}
+                />
+              </div>
+            </>
+          )}
+
+          <button
+            onClick={runDebug}
+            disabled={loading}
+            style={{
+              padding: '10px 20px',
+              borderRadius: 8,
+              border: 'none',
+              background: '#1976d2',
+              color: '#fff',
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: loading ? 0.7 : 1,
+              alignSelf: 'flex-start',
+            }}
+          >
+            {loading ? t('debug.running') : t('debug.runDebug')}
+          </button>
+        </div>
       </div>
 
-      {error && <p style={{ color: "#c00" }}>{error}</p>}
+      {error && (
+        <div
+          style={{
+            background: '#ffebee',
+            color: '#c62828',
+            padding: '12px 16px',
+            borderRadius: 8,
+            marginBottom: 16,
+            fontSize: 14,
+            fontWeight: 500,
+          }}
+        >
+          {error}
+        </div>
+      )}
 
       {result && (
-        <div style={{ border: "1px solid #ddd", borderRadius: 8, padding: 16 }}>
-          <h3>Request URL</h3>
+        <div
+          style={{
+            background: '#fff',
+            borderRadius: 12,
+            boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+            padding: 24,
+          }}
+        >
+          <h3 style={{ margin: '0 0 12px', fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>
+            {t('debug.requestUrl')}
+          </h3>
           <pre
             style={{
-              background: "#f5f5f5",
-              padding: 12,
-              borderRadius: 4,
-              overflow: "auto",
+              background: '#f8f9fa',
+              padding: 14,
+              borderRadius: 8,
+              overflow: 'auto',
               fontSize: 13,
+              border: '1px solid #f0f0f0',
             }}
           >
             {result.request_url}
           </pre>
 
-          <h3>Raw Response (first 5000 chars)</h3>
+          <h3 style={{ margin: '20px 0 12px', fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>
+            {t('debug.rawResponse')}
+          </h3>
           <pre
             style={{
-              background: "#f5f5f5",
-              padding: 12,
-              borderRadius: 4,
-              overflow: "auto",
+              background: '#f8f9fa',
+              padding: 14,
+              borderRadius: 8,
+              overflow: 'auto',
               fontSize: 12,
               maxHeight: 400,
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              border: '1px solid #f0f0f0',
             }}
           >
             {result.raw_response}
           </pre>
 
-          <h3>Parsed Result</h3>
+          <h3 style={{ margin: '20px 0 12px', fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>
+            {t('debug.parsedResult')}
+          </h3>
           <pre
             style={{
-              background: "#f5f5f5",
-              padding: 12,
-              borderRadius: 4,
-              overflow: "auto",
+              background: '#f8f9fa',
+              padding: 14,
+              borderRadius: 8,
+              overflow: 'auto',
               fontSize: 13,
               maxHeight: 400,
-              whiteSpace: "pre-wrap",
+              whiteSpace: 'pre-wrap',
+              border: '1px solid #f0f0f0',
             }}
           >
             {result.parsed_result}

@@ -25,13 +25,17 @@ impl JsExtState {
     // ==================== Cookie ====================
 
     pub fn get_cookie(&self, tag: &str, key: Option<&str>) -> String {
-        let cookies = self.cookies.lock().unwrap();
+        let cookies = self
+            .cookies
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         match key {
             Some(k) => {
                 // Extract specific key from cookie string
-                cookies.get(tag).map(|s| {
-                    Self::extract_cookie_value(s, k)
-                }).unwrap_or_default()
+                cookies
+                    .get(tag)
+                    .map(|s| Self::extract_cookie_value(s, k))
+                    .unwrap_or_default()
             }
             None => cookies.get(tag).cloned().unwrap_or_default(),
         }
@@ -59,12 +63,15 @@ impl JsExtState {
     // ==================== Cache ====================
 
     pub fn get_cache(&self, key: &str) -> Option<String> {
-        let cache = self.cache.lock().unwrap();
+        let cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         cache.get(key).and_then(|(value, expiry)| {
             if let Some(exp) = expiry {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
+                    .unwrap_or_default()
                     .as_secs();
                 if now > *exp {
                     return None;
@@ -75,11 +82,14 @@ impl JsExtState {
     }
 
     pub fn set_cache(&self, key: &str, value: &str, save_time: u64) {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self
+            .cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let expiry = if save_time > 0 {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
             Some(now + save_time)
         } else {
@@ -166,7 +176,10 @@ mod tests {
     fn test_cookie_store() {
         let state = JsExtState::new();
         state.set_cookie("example.com", "session=abc123; path=/");
-        assert_eq!(state.get_cookie("example.com", None), "session=abc123; path=/");
+        assert_eq!(
+            state.get_cookie("example.com", None),
+            "session=abc123; path=/"
+        );
         assert_eq!(state.get_cookie("example.com", Some("session")), "abc123");
     }
 

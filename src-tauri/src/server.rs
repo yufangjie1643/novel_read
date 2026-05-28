@@ -1,8 +1,9 @@
 //! Simple built-in HTTP server for sharing bookshelf over local network
 
 use serde_json::json;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use tiny_http::{Response, Server};
 
@@ -12,40 +13,91 @@ use crate::db::{
 };
 
 static SERVER_RUNNING: AtomicBool = AtomicBool::new(false);
+static SERVER_ADDR: Mutex<Option<String>> = Mutex::new(None);
 
-/// Start the built-in web server on the given port
-pub fn start_server(port: u16) -> Result<String, String> {
-    if SERVER_RUNNING.swap(true, Ordering::SeqCst) {
-        return Err("Server already running".to_string());
-    }
-
-    let addr = format!("0.0.0.0:{}", port);
-    let server = match Server::http(&addr) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            SERVER_RUNNING.store(false, Ordering::SeqCst);
-            return Err(format!("Failed to start server: {}", e));
-        }
-    };
-
-    let server_clone = server.clone();
-    let addr_for_thread = addr.clone();
-    thread::spawn(move || {
-        println!("[WebServer] Listening on http://{}", addr_for_thread);
-        for request in server_clone.incoming_requests() {
-            let response = handle_request(request.url());
-            let _ = request.respond(response);
-        }
-        SERVER_RUNNING.store(false, Ordering::SeqCst);
-        println!("[WebServer] Stopped");
-    });
-
-    Ok(format!("http://{}", addr))
+/// Get the local LAN IP address (best-effort).
+/// Uses a UDP socket trick to determine the primary outgoing interface.
+fn get_local_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|a| a.ip().to_string())
 }
 
-/// Stop the web server
+/// Start the built-in web server on the given port.
+/// If the requested port is in use, automatically tries the next 9 ports.
+pub fn start_server(port: u16) -> Result<String, String> {
+    if SERVER_RUNNING.load(Ordering::SeqCst) {
+        if let Ok(addr) = SERVER_ADDR.lock() {
+            if let Some(a) = addr.as_ref() {
+                return Ok(a.clone());
+            }
+        }
+    }
+
+    let host = get_local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+
+    for try_port in port..=port.saturating_add(9) {
+        let bind_addr = format!("0.0.0.0:{}", try_port);
+        let server = match Server::http(&bind_addr) {
+            Ok(s) => Arc::new(s),
+            Err(_) => continue,
+        };
+
+        SERVER_RUNNING.store(true, Ordering::SeqCst);
+        let server_clone = server.clone();
+        let result_url = format!("http://{}:{}", host, try_port);
+
+        if let Ok(mut guard) = SERVER_ADDR.lock() {
+            *guard = Some(result_url.clone());
+        }
+
+        thread::spawn(move || {
+            println!("[WebServer] Listening on http://{}", bind_addr);
+            for request in server_clone.incoming_requests() {
+                if !SERVER_RUNNING.load(Ordering::SeqCst) {
+                    let _ = request.respond(Response::from_string("Server shutting down"));
+                    break;
+                }
+                let response = handle_request(request.url());
+                let _ = request.respond(response);
+            }
+            // Thread ends, server_clone dropped, port released.
+            SERVER_RUNNING.store(false, Ordering::SeqCst);
+            if let Ok(mut guard) = SERVER_ADDR.lock() {
+                *guard = None;
+            }
+            println!("[WebServer] Stopped");
+        });
+
+        return Ok(result_url);
+    }
+
+    Err("Failed to start server: all ports in range are in use".to_string())
+}
+
+/// Stop the web server by signalling the thread to exit and waking up
+/// the blocking `incoming_requests()` iterator with a dummy request.
 pub fn stop_server() {
+    if !SERVER_RUNNING.load(Ordering::SeqCst) {
+        return;
+    }
     SERVER_RUNNING.store(false, Ordering::SeqCst);
+
+    // Wake up the blocking accept() by sending a dummy HTTP request.
+    if let Ok(addr_guard) = SERVER_ADDR.lock() {
+        if let Some(addr) = addr_guard.as_ref() {
+            if let Some(port_str) = addr.rsplit(':').next() {
+                if let Ok(port) = port_str.parse::<u16>() {
+                    let _ = std::net::TcpStream::connect(("127.0.0.1", port))
+                        .and_then(|mut stream| {
+                            stream.write_all(
+                                b"GET /api/status HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                            )
+                        });
+                }
+            }
+        }
+    }
 }
 
 /// Check if server is running
@@ -65,11 +117,13 @@ fn handle_request(url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
         Err(e) => json!({ "error": e }).to_string(),
     };
 
-    Response::from_string(body)
-        .with_header(tiny_http::Header::from_bytes(
+    Response::from_string(body).with_header(
+        tiny_http::Header::from_bytes(
             &b"Content-Type"[..],
             &b"application/json; charset=utf-8"[..],
-        ).unwrap())
+        )
+        .unwrap(),
+    )
 }
 
 fn get_books_json() -> Result<String, String> {
