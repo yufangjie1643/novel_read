@@ -137,11 +137,34 @@ function ResultCard({
       }}
     >
       {book.cover_url ? (
-        <img
-          src={book.cover_url}
-          alt="cover"
-          style={{ width: 76, height: 96, objectFit: 'cover', borderRadius: 10, flexShrink: 0 }}
-        />
+        <div
+          style={{
+            width: 76,
+            height: 96,
+            flexShrink: 0,
+            aspectRatio: '76 / 96',
+            borderRadius: 10,
+            overflow: 'hidden',
+            background: 'linear-gradient(145deg, #e8eaf6 0%, #f3e5f5 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#5c6bc0',
+            fontSize: 18,
+            fontWeight: 800,
+          }}
+        >
+          <img
+            src={book.cover_url}
+            alt="cover"
+            loading="lazy"
+            decoding="async"
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = 'none';
+            }}
+          />
+        </div>
       ) : (
         <div
           style={{
