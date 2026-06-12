@@ -76,7 +76,15 @@ cd src-tauri\gen\android
 
 1. Connect device via USB, accept the "Allow USB debugging" dialog.
 2. On the device, open **Settings → Additional settings → Developer options → USB debugging (security settings)** and enable **Install via USB** (tap "I know the risk" on the warning). This is a Xiaomi/MIUI requirement; without it, `adb install` returns `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` regardless of the APK signature.
-3. Install and launch:
+3. **Use the automation script** to install and auto-click the confirm dialog (window is ~10 s before it auto-dismisses):
+
+```powershell
+& pwsh scripts/install-android.ps1 -ApkPath "src-tauri\gen\android\app\build\outputs\apk\arm64\debug\app-arm64-debug.apk"
+```
+
+The script polls `dumpsys window` for `com.miui.permcenter.install.AdbInstallActivity`, dumps the UI via `uiautomator`, parses out the Continue button bounds (using GBK decoding for Chinese ROMs), and taps its center. Verified end-to-end on Xiaomi 23049RAD8C: 9.5 s for the 17 MB release APK, 19.8 s for the 249 MB debug APK (the debug variant streams more data so the dialog appears later).
+
+If you need the raw `adb install` form instead:
 
 ```powershell
 $adb = "D:\code\novel_read\.android-tools\sdk\platform-tools\adb.exe"
@@ -110,6 +118,8 @@ The app stores the DB at `/data/data/io.legado.desktop/legado.db` (= `Context.ge
 - **tauri-cli 2.11.2 `android-studio-script` panics** with "failed to build WebSocket client" when invoked outside `cargo tauri android build` (e.g. via Gradle directly). The CLI expects a parent process to be running an options-server and write `{identifier}-server-addr` into `$TEMP`. Don't run `gradlew assembleDebug` without first going through `cargo tauri android build`, or skip all rustBuild* tasks as documented.
 - **`rquickjs-sys` Android build** uses bindgen and needs the NDK sysroot for `<stdio.h>`. The `BINDGEN_EXTRA_CLANG_ARGS` env var pointing at `$NDK_HOME/.../sysroot` is mandatory.
 - **Xiaomi "Install via USB"** is separate from regular USB debugging. Without it, every ADB install returns `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` even with `pm install`, fresh keystore signing, or any `appops` workaround.
+- **MIUI's "AdbInstallActivity" confirmation dialog** auto-dismisses in ~10 s. The "Continue" button is on the LEFT (`text="继续安装"`, `bounds=[99,2119][523,2257]` on 1080x2400), the "Reject" button is on the RIGHT. MIUI puts the affirmative opposite of the typical Android AlertDialog convention. Use `scripts/install-android.ps1` — it dumps the UI, parses the button bounds, and taps within the window. UIAutomator dumps on Chinese ROMs are encoded in GBK even though the XML header says UTF-8; the script detects this by trying `gb18030` first.
+- **PowerShell stderr handling**: `adb` prints success info to stderr ("1 file pushed, ..."). Pipe through `cmd /c "... 2>nul"` and set `$ErrorActionPreference = "SilentlyContinue"` around the call to avoid false "non-terminating error" exceptions.
 
 ## Coding Style & Naming Conventions
 
