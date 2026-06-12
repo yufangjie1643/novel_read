@@ -9,8 +9,9 @@ pub mod state;
 pub mod webdav;
 
 use commands::*;
+use tauri::Manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-use tauri::{LogicalSize, Manager, Size};
+use tauri::{LogicalSize, Size};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 
@@ -135,6 +136,7 @@ pub fn run() {
             get_rss_read_article_ids,
             // WebBook commands
             search_books,
+            search_books_stream,
             explore_books,
             fetch_book_info,
             fetch_chapter_list,

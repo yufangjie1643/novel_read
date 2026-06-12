@@ -1,6 +1,7 @@
 use crate::book_source::{
     analyze_url::AnalyzeUrl,
     js_extensions::JsExtState,
+    search_streamer::{run_stream, SearchEvent, SearchSink},
     source_loader::{load_source_from_url, parse_source_json},
     web_book::WebBook,
 };
@@ -22,6 +23,9 @@ use crate::local_book::{import_epub_content, import_txt_bytes};
 use crate::server;
 use crate::state::AppState;
 use crate::webdav::WebDavClient;
+use std::sync::Arc;
+use tauri::ipc::Channel;
+use tauri::State;
 use rusqlite::params;
 use serde::Serialize;
 use std::io::{Cursor, Read};
@@ -1824,6 +1828,55 @@ pub async fn search_books(
             error: Some(format!("Task failed: {}", e)),
         },
     }
+}
+
+pub struct TauriChannelSink {
+    channel: Channel<SearchEvent>,
+}
+
+impl TauriChannelSink {
+    pub fn new(channel: Channel<SearchEvent>) -> Self {
+        Self { channel }
+    }
+}
+
+impl SearchSink for TauriChannelSink {
+    fn send(&self, event: SearchEvent) -> Result<(), String> {
+        self.channel.send(event).map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn search_books_stream(
+    query: String,
+    sources: Vec<crate::db::BookSource>,
+    channel: Channel<SearchEvent>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut guard = state.search_cancel_tx.lock().await;
+        if let Some(old) = guard.take() {
+            let _ = old.send(true);
+        }
+        *guard = Some(cancel_tx);
+    }
+
+    let mock_sources: Vec<crate::book_source::search_streamer::MockSource> = sources
+        .into_iter()
+        .map(|s| crate::book_source::search_streamer::MockSource {
+            url: s.book_source_url.clone(),
+            name: s.book_source_name.clone(),
+            books: vec![],
+            delay_ms: 0,
+            fail: None,
+        })
+        .collect();
+
+    let sink = Arc::new(TauriChannelSink::new(channel));
+    let request_id = uuid::Uuid::new_v4().to_string();
+    run_stream(query, mock_sources, sink.clone(), request_id, cancel_rx).await;
+    Ok(())
 }
 
 #[tauri::command]

@@ -19,7 +19,7 @@ pub use dao::{
     RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao, SearchKeywordDao,
     ServerDao, TxtTocRuleDao,
 };
-pub use models::{RssSource, RuleSub};
+pub use models::{BookSource, RssSource, RuleSub};
 pub use source_stats_dao::{compute_health, HealthInputs, SourceStats, SourceStatsDao};
 
 /// Pool size used for the shared `deadpool-sqlite` connection pool.
@@ -210,5 +210,6 @@ pub fn init_app_state(
     bootstrap_first_conn(&mut seed_conn)?;
     seed::seed_defaults(&seed_conn)?;
 
-    Ok(crate::state::AppState::build(pool))
+    let source_stats = std::sync::Arc::new(crate::db::SourceStatsDao::new(pool.clone()));
+    Ok(crate::state::AppState::build(pool, source_stats))
 }
