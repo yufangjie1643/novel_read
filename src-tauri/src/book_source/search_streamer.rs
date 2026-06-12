@@ -1,0 +1,297 @@
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Semaphore;
+
+pub const PER_SOURCE_TIMEOUT: Duration = Duration::from_secs(2);
+pub const GLOBAL_TIMEOUT: Duration = Duration::from_millis(3500);
+pub const MAX_CONCURRENCY: usize = 8;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum FailureKind {
+    Timeout,
+    Http,
+    Parse,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "event", rename_all = "PascalCase")]
+pub enum SearchEvent {
+    Started {
+        request_id: String,
+        query: String,
+        total_sources: usize,
+    },
+    SourceStarted {
+        source_url: String,
+        source_name: String,
+    },
+    Result {
+        source_url: String,
+        book: crate::db::models::SearchBook,
+        score: crate::book_source::relevance::ScoreBreakdown,
+    },
+    SourceFinished {
+        source_url: String,
+        count: usize,
+        latency_ms: u64,
+    },
+    SourceFailed {
+        source_url: String,
+        error: String,
+        latency_ms: u64,
+        kind: FailureKind,
+    },
+    Done {
+        request_id: String,
+        succeeded: usize,
+        failed: usize,
+        total_results: usize,
+        duration_ms: u64,
+    },
+}
+
+pub trait SearchSink: Send + Sync {
+    fn send(&self, event: SearchEvent) -> Result<(), String>;
+}
+
+pub struct MockSource {
+    pub url: String,
+    pub name: String,
+    pub books: Vec<MockBook>,
+    pub delay_ms: u64,
+    pub fail: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct MockBook {
+    pub name: String,
+    pub author: Option<String>,
+}
+
+pub async fn run_stream<S: SearchSink + 'static>(
+    query: String,
+    sources: Vec<MockSource>,
+    sink: Arc<S>,
+    request_id: String,
+    cancel: tokio::sync::watch::Receiver<bool>,
+) {
+    let started_at = std::time::Instant::now();
+    let total = sources.len();
+    let _ = sink.send(SearchEvent::Started {
+        request_id: request_id.clone(),
+        query: query.clone(),
+        total_sources: total,
+    });
+
+    if total == 0 {
+        let _ = sink.send(SearchEvent::Done {
+            request_id,
+            succeeded: 0,
+            failed: 0,
+            total_results: 0,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+        });
+        return;
+    }
+
+    let sem = Arc::new(Semaphore::new(MAX_CONCURRENCY));
+    let mut tasks = Vec::with_capacity(total);
+
+    for src in sources {
+        if *cancel.borrow() {
+            break;
+        }
+        let sem = sem.clone();
+        let sink = sink.clone();
+        let q = query.clone();
+        let cancel_rx = cancel.clone();
+        tasks.push(tokio::spawn(async move {
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            if *cancel_rx.borrow() {
+                return;
+            }
+            let _ = sink.send(SearchEvent::SourceStarted {
+                source_url: src.url.clone(),
+                source_name: src.name.clone(),
+            });
+            let t0 = std::time::Instant::now();
+            let outcome: Result<Vec<MockBook>, String> = if let Some(err) = &src.fail {
+                Err(err.clone())
+            } else {
+                let q_clone = q.clone();
+                let books_clone = src.books.clone();
+                let delay = src.delay_ms;
+                tokio::time::timeout(PER_SOURCE_TIMEOUT, async move {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    Ok::<_, String>(books_clone).map(|b| {
+                        b.into_iter()
+                            .filter(|mb| {
+                                let q_norm = q_clone.to_lowercase();
+                                mb.name.to_lowercase().contains(&q_norm) || q_norm.is_empty()
+                            })
+                            .collect()
+                    })
+                })
+                .await
+                .map_err(|_| "timeout".to_string())
+                .and_then(|r| r)
+            };
+            let latency_ms = t0.elapsed().as_millis() as u64;
+            match outcome {
+                Ok(books) => {
+                    for mb in books {
+                        let mut book = crate::db::models::SearchBook::default();
+                        book.name = mb.name;
+                        book.author = mb.author;
+                        book.origin = src.url.clone();
+                        let score = crate::book_source::relevance::ScoreBreakdown {
+                            words: 0,
+                            typo: 0,
+                            proximity: 0,
+                            source_weight: 0,
+                            attribute_rank: 0,
+                            word_position: 0,
+                            source_health: 0,
+                        };
+                        let _ = sink.send(SearchEvent::Result {
+                            source_url: src.url.clone(),
+                            book,
+                            score,
+                        });
+                    }
+                    let _ = sink.send(SearchEvent::SourceFinished {
+                        source_url: src.url,
+                        count: 0,
+                        latency_ms,
+                    });
+                }
+                Err(e) if e == "timeout" => {
+                    let _ = sink.send(SearchEvent::SourceFailed {
+                        source_url: src.url,
+                        error: "timeout".into(),
+                        latency_ms,
+                        kind: FailureKind::Timeout,
+                    });
+                }
+                Err(e) => {
+                    let _ = sink.send(SearchEvent::SourceFailed {
+                        source_url: src.url,
+                        error: e,
+                        latency_ms,
+                        kind: FailureKind::Http,
+                    });
+                }
+            }
+        }));
+    }
+
+    let _ = tokio::time::timeout(GLOBAL_TIMEOUT, futures::future::join_all(tasks)).await;
+
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    let _ = sink.send(SearchEvent::Done {
+        request_id,
+        succeeded: 0,
+        failed: 0,
+        total_results: 0,
+        duration_ms,
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct CollectingSink {
+        events: Mutex<Vec<SearchEvent>>,
+    }
+    impl SearchSink for CollectingSink {
+        fn send(&self, event: SearchEvent) -> Result<(), String> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+    }
+
+    fn mk_source(url: &str, books: Vec<(&str, Option<&str>)>, delay_ms: u64) -> MockSource {
+        MockSource {
+            url: url.to_string(),
+            name: url.to_string(),
+            books: books
+                .into_iter()
+                .map(|(n, a)| MockBook {
+                    name: n.to_string(),
+                    author: a.map(String::from),
+                })
+                .collect(),
+            delay_ms,
+            fail: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn all_sources_succeed() {
+        let sink = Arc::new(CollectingSink::default());
+        let sources = vec![
+            mk_source("a", vec![("Book A1", Some("Auth A")), ("Book A2", None)], 10),
+            mk_source("b", vec![("Book B1", None)], 10),
+        ];
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        run_stream("test".to_string(), sources, sink.clone(), "req-1".to_string(), rx).await;
+        let events = sink.events.lock().unwrap();
+        let started = events.iter().filter(|e| matches!(e, SearchEvent::Started { .. })).count();
+        let finished = events.iter().filter(|e| matches!(e, SearchEvent::SourceFinished { .. })).count();
+        let done = events.iter().filter(|e| matches!(e, SearchEvent::Done { .. })).count();
+        assert_eq!(started, 1);
+        assert_eq!(finished, 2);
+        assert_eq!(done, 1);
+    }
+
+    #[tokio::test]
+    async fn one_source_times_out() {
+        let sink = Arc::new(CollectingSink::default());
+        let mut slow = mk_source("slow", vec![("Book", None)], 5000);
+        slow.fail = Some("timeout".to_string());
+        let fast = mk_source("fast", vec![("Book", None)], 10);
+        let sources = vec![slow, fast];
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        run_stream("test".to_string(), sources, sink.clone(), "req-2".to_string(), rx).await;
+        let events = sink.events.lock().unwrap();
+        let failures: Vec<&SearchEvent> = events
+            .iter()
+            .filter(|e| matches!(e, SearchEvent::SourceFailed { kind: FailureKind::Timeout, .. }))
+            .collect();
+        assert_eq!(failures.len(), 1, "expected exactly one timeout failure");
+    }
+
+    #[tokio::test]
+    async fn cancel_before_start_does_nothing() {
+        let sink = Arc::new(CollectingSink::default());
+        let sources = vec![mk_source("a", vec![("Book", None)], 10)];
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        tx.send(true).unwrap();
+        run_stream("test".to_string(), sources, sink.clone(), "req-3".to_string(), rx).await;
+        let events = sink.events.lock().unwrap();
+        let started: usize = events.iter().filter(|e| matches!(e, SearchEvent::SourceStarted { .. })).count();
+        let results: usize = events.iter().filter(|e| matches!(e, SearchEvent::Result { .. })).count();
+        let done: usize = events.iter().filter(|e| matches!(e, SearchEvent::Done { .. })).count();
+        assert_eq!(started, 0);
+        assert_eq!(results, 0);
+        assert_eq!(done, 1);
+    }
+
+    #[tokio::test]
+    async fn events_ordered() {
+        let sink = Arc::new(CollectingSink::default());
+        let sources = vec![mk_source("a", vec![("Book", None)], 10)];
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        run_stream("test".to_string(), sources, sink.clone(), "req-4".to_string(), rx).await;
+        let events = sink.events.lock().unwrap();
+        assert!(matches!(events.first().unwrap(), SearchEvent::Started { .. }));
+        assert!(matches!(events.last().unwrap(), SearchEvent::Done { .. }));
+    }
+}
