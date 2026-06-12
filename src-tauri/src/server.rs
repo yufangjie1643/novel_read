@@ -127,12 +127,12 @@ fn handle_request(url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
 }
 
 fn get_books_json() -> Result<String, String> {
-    let dao = BookDao::new(db());
+    let dao = BookDao::new(db().as_conn());
     let books = dao.get_all().map_err(|e| e.to_string())?;
 
     let mut result = Vec::new();
     for book in books {
-        let chapter_dao = BookChapterDao::new(db());
+        let chapter_dao = BookChapterDao::new(db().as_conn());
         let chapters = chapter_dao
             .get_chapters(&book.book_url)
             .unwrap_or_default()

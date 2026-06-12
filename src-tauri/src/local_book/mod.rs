@@ -66,9 +66,9 @@ fn save_imported_book(
     book: Book,
     parsed_chapters: Vec<ImportedChapter>,
 ) -> Result<(Book, usize), ImportError> {
-    let book_dao = BookDao::new(db());
-    let chapter_dao = BookChapterDao::new(db());
-    let content_dao = ChapterContentDao::new(db());
+    let book_dao = BookDao::new(db().as_conn());
+    let chapter_dao = BookChapterDao::new(db().as_conn());
+    let content_dao = ChapterContentDao::new(db().as_conn());
 
     // Check if book already exists (outside transaction)
     if let Ok(Some(_)) = book_dao.get(&book.book_url) {
@@ -76,7 +76,7 @@ fn save_imported_book(
     }
 
     // Wrap all insertions in a transaction for atomicity
-    let mut conn = db().conn();
+    let conn: &mut rusqlite::Connection = db().as_mut_conn();
     let tx = conn.transaction()?;
 
     book_dao.insert_conn(&tx, &book)?;

@@ -14,22 +14,85 @@ use crate::db::{
     },
     db, db_path,
     models::{
-        Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItemsPage, HttpTTS,
-        KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource, RssStar,
-        RuleSub, SearchBook, SearchKeyword, Server, SourceLink, TxtTocRule,
+        Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItemsPage,
+        ExploreKind, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord,
+        RssSource, RssStar, RuleSub, SearchBook, SearchKeyword, Server, SourceLink, TxtTocRule,
     },
 };
 use crate::local_book::{import_epub_content, import_txt_bytes};
 use crate::server;
+use crate::state::AppState;
 use crate::webdav::WebDavClient;
 use rusqlite::params;
 use serde::Serialize;
+use std::io::{Cursor, Read};
+use std::path::{Component, Path, PathBuf};
+use std::time::UNIX_EPOCH;
+use tauri::Manager;
 
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
+}
+
+/// Run a synchronous DB closure on a pooled connection off the Tauri IPC
+/// runtime thread. The closure runs inside `deadpool_sqlite::Object::interact`,
+/// which itself spawns a worker thread; the outer future is `async` so
+/// the Tauri runtime is never blocked.
+///
+/// Takes `AppHandle` (owned) rather than `State<'_, AppState>` because Tauri
+/// v2 requires async commands with reference parameters to return
+/// `Result<T, E>`; an owned `AppHandle` keeps the signature reference-free.
+///
+/// Returns an `ApiResponse<T>` with the closure's `Result<T, rusqlite::Error>`.
+/// `Err` is set for pool exhaustion, interact failure, or DB errors.
+async fn db_op<F, T>(app_handle: tauri::AppHandle, f: F) -> ApiResponse<T>
+where
+    F: FnOnce(&mut rusqlite::Connection) -> Result<T, rusqlite::Error> + Send + 'static,
+    T: Send + 'static,
+{
+    let pool = app_handle.state::<AppState>().db.clone();
+    drop(app_handle);
+    let result: Result<Result<T, rusqlite::Error>, String> = async {
+        let obj = pool.get().await.map_err(|e| format!("pool: {}", e))?;
+        obj.interact(f).await.map_err(|e| format!("interact: {}", e))
+    }
+    .await;
+    match result {
+        Ok(Ok(v)) => ApiResponse {
+            success: true,
+            data: Some(v),
+            error: None,
+        },
+        Ok(Err(e)) => ApiResponse {
+            success: false,
+            data: None,
+            error: Some(format!("db: {}", e)),
+        },
+        Err(e) => ApiResponse {
+            success: false,
+            data: None,
+            error: Some(e),
+        },
+    }
+}
+
+#[derive(Serialize)]
+pub struct ManagedFile {
+    pub name: String,
+    pub relative_path: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub modified: Option<u64>,
+}
+
+#[derive(Serialize)]
+pub struct ManagedFileList {
+    pub current_path: String,
+    pub parent_path: Option<String>,
+    pub files: Vec<ManagedFile>,
 }
 
 fn ok<T>(data: T) -> ApiResponse<T> {
@@ -53,108 +116,64 @@ fn err<T>(message: impl Into<String>) -> ApiResponse<T> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_books() -> ApiResponse<Vec<Book>> {
-    let dao = BookDao::new(db());
-    match dao.get_all() {
-        Ok(books) => ApiResponse {
-            success: true,
-            data: Some(books),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_books(app_handle: tauri::AppHandle) -> ApiResponse<Vec<Book>> {
+    db_op(app_handle, |conn| BookDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_book(book: Book) -> ApiResponse<()> {
-    let dao = BookDao::new(db());
-    match dao.insert(&book) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_book(
+    app_handle: tauri::AppHandle,
+    book: Book,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookDao::new(conn).insert(&book).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_book(book: Book) -> ApiResponse<()> {
-    let dao = BookDao::new(db());
-    match dao.update(&book) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_book(
+    app_handle: tauri::AppHandle,
+    book: Book,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookDao::new(conn).update(&book).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_book(book_url: String) -> ApiResponse<()> {
-    let dao = BookDao::new(db());
-    match dao.delete(&book_url) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_book(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookDao::new(conn).delete(&book_url).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn clear_book_cache(book_url: String) -> ApiResponse<()> {
-    let dao = ChapterContentDao::new(db());
-    match dao.delete_by_book(&book_url) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn clear_book_cache(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        ChapterContentDao::new(conn)
+            .delete_by_book(&book_url)
+            .map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn migrate_book_source(
+pub async fn migrate_book_source(
+    app_handle: tauri::AppHandle,
     old_book_url: String,
     mut book: Book,
     mut chapters: Vec<BookChapter>,
 ) -> ApiResponse<()> {
-    let mut conn = db().conn();
-    let tx = match conn.transaction() {
-        Ok(tx) => tx,
-        Err(e) => {
-            return ApiResponse {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            };
-        }
-    };
-
+    // Pre-process the data outside the closure (no borrow into the txn).
     for chapter in &mut chapters {
         chapter.book_url = book.book_url.clone();
     }
@@ -166,50 +185,40 @@ pub fn migrate_book_source(
         book.dur_chapter_title = Some(chapter.title.clone());
     }
 
-    let result = (|| -> rusqlite::Result<()> {
-        tx.execute(
-            "DELETE FROM book_chapters WHERE bookUrl = ?1",
-            params![old_book_url],
-        )?;
-        tx.execute(
-            "DELETE FROM chapter_contents WHERE bookUrl = ?1",
-            params![old_book_url],
-        )?;
-        tx.execute(
-            "UPDATE bookmarks SET bookUrl = ?1 WHERE bookUrl = ?2",
-            params![book.book_url, old_book_url],
-        )?;
-        if old_book_url != book.book_url {
+    db_op(
+        app_handle,
+        move |conn| -> rusqlite::Result<()> {
+            let tx = conn.transaction()?;
+            tx.execute(
+                "DELETE FROM book_chapters WHERE bookUrl = ?1",
+                params![old_book_url],
+            )?;
+            tx.execute(
+                "DELETE FROM chapter_contents WHERE bookUrl = ?1",
+                params![old_book_url],
+            )?;
+            tx.execute(
+                "UPDATE bookmarks SET bookUrl = ?1 WHERE bookUrl = ?2",
+                params![book.book_url, old_book_url],
+            )?;
+            if old_book_url != book.book_url {
+                tx.execute(
+                    "DELETE FROM books WHERE bookUrl = ?1",
+                    params![book.book_url],
+                )?;
+            }
             tx.execute(
                 "DELETE FROM books WHERE bookUrl = ?1",
-                params![book.book_url],
+                params![old_book_url],
             )?;
-        }
-        tx.execute(
-            "DELETE FROM books WHERE bookUrl = ?1",
-            params![old_book_url],
-        )?;
 
-        let book_dao = BookDao::new(db());
-        book_dao.insert_conn(&tx, &book)?;
-        let chapter_dao = BookChapterDao::new(db());
-        chapter_dao.insert_many_conn(&tx, &chapters)?;
-        tx.commit()?;
-        Ok(())
-    })();
-
-    match result {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
+            BookDao::new(&tx).insert_conn(&tx, &book)?;
+            BookChapterDao::new(&tx).insert_many_conn(&tx, &chapters)?;
+            tx.commit()?;
+            Ok(())
         },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+    )
+    .await
 }
 
 // ============================================================================
@@ -217,144 +226,129 @@ pub fn migrate_book_source(
 // ============================================================================
 
 #[tauri::command]
-pub fn get_book_sources() -> ApiResponse<Vec<BookSource>> {
-    let dao = BookSourceDao::new(db());
-    match dao.get_all() {
-        Ok(sources) => ApiResponse {
-            success: true,
-            data: Some(sources),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_book_sources(app_handle: tauri::AppHandle) -> ApiResponse<Vec<BookSource>> {
+    db_op(app_handle, |conn| BookSourceDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn get_enabled_book_sources() -> ApiResponse<Vec<BookSource>> {
-    let dao = BookSourceDao::new(db());
-    match dao.get_enabled() {
-        Ok(sources) => ApiResponse {
-            success: true,
-            data: Some(sources),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_enabled_book_sources(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<BookSource>> {
+    db_op(app_handle, |conn| BookSourceDao::new(conn).get_enabled()).await
 }
 
 #[tauri::command]
-pub fn get_explore_book_sources() -> ApiResponse<Vec<BookSource>> {
-    let dao = BookSourceDao::new(db());
-    match dao.get_explore_enabled() {
-        Ok(sources) => ApiResponse {
-            success: true,
-            data: Some(sources),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_explore_book_sources(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<BookSource>> {
+    db_op(app_handle, |conn| BookSourceDao::new(conn).get_explore_enabled()).await
 }
 
 #[tauri::command]
-pub fn get_explore_items(
+pub async fn get_explore_items(
+    app_handle: tauri::AppHandle,
     offset: Option<usize>,
     limit: Option<usize>,
     filter: Option<String>,
 ) -> ApiResponse<ExploreItemsPage> {
-    let dao = BookSourceDao::new(db());
     let limit = limit.unwrap_or(80).clamp(1, 300);
-    match dao.get_explore_items(offset.unwrap_or(0), limit, filter.as_deref()) {
-        Ok(page) => ApiResponse {
-            success: true,
-            data: Some(page),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+    db_op(app_handle, move |conn| {
+        BookSourceDao::new(conn).get_explore_items(
+            offset.unwrap_or(0),
+            limit,
+            filter.as_deref(),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_book_source(url: String) -> ApiResponse<Option<BookSource>> {
-    let dao = BookSourceDao::new(db());
-    match dao.get(&url) {
-        Ok(source) => ApiResponse {
-            success: true,
-            data: Some(source),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_book_source(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> ApiResponse<Option<BookSource>> {
+    db_op(app_handle, move |conn| BookSourceDao::new(conn).get(&url)).await
 }
 
 #[tauri::command]
-pub fn add_book_source(source: BookSource) -> ApiResponse<()> {
-    let dao = BookSourceDao::new(db());
-    match dao.insert(&source) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_book_source(
+    app_handle: tauri::AppHandle,
+    source: BookSource,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookSourceDao::new(conn).insert(&source).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_book_source(source: BookSource) -> ApiResponse<()> {
-    let dao = BookSourceDao::new(db());
-    match dao.update(&source) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_book_source(
+    app_handle: tauri::AppHandle,
+    source: BookSource,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookSourceDao::new(conn).update(&source).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_book_source(url: String) -> ApiResponse<()> {
-    let dao = BookSourceDao::new(db());
-    match dao.delete(&url) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_book_source(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookSourceDao::new(conn).delete(&url).map(|_| ())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn top_book_source(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        let dao = BookSourceDao::new(conn);
+        let min = dao.min_order()?;
+        dao.update_order(&url, min - 1)?;
+        Ok(())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_book_source_groups(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<String>> {
+    db_op(app_handle, |conn| {
+        let mut groups: Vec<String> = BookSourceDao::new(conn)
+            .get_explore_enabled()?
+            .into_iter()
+            .filter_map(|s| s.book_source_group)
+            .flat_map(|g| {
+                g.split(",")
+                    .map(|s| s.trim().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|g| !g.is_empty())
+            .collect();
+        groups.sort();
+        groups.dedup();
+        Ok(groups)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_explore_kinds(
+    app_handle: tauri::AppHandle,
+    source_url: String,
+) -> ApiResponse<Vec<ExploreKind>> {
+    db_op(app_handle, move |conn| {
+        BookSourceDao::new(conn).get_explore_kinds(&source_url)
+    })
+    .await
 }
 
 // ============================================================================
@@ -362,54 +356,36 @@ pub fn delete_book_source(url: String) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_chapters(book_url: String) -> ApiResponse<Vec<BookChapter>> {
-    let dao = BookChapterDao::new(db());
-    match dao.get_chapters(&book_url) {
-        Ok(chapters) => ApiResponse {
-            success: true,
-            data: Some(chapters),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_chapters(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+) -> ApiResponse<Vec<BookChapter>> {
+    db_op(app_handle, move |conn| {
+        BookChapterDao::new(conn).get_chapters(&book_url)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn add_chapters(chapters: Vec<BookChapter>) -> ApiResponse<()> {
-    let dao = BookChapterDao::new(db());
-    match dao.insert_many(&chapters) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_chapters(
+    app_handle: tauri::AppHandle,
+    chapters: Vec<BookChapter>,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookChapterDao::new(conn).insert_many(&chapters).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_chapters(book_url: String) -> ApiResponse<()> {
-    let dao = BookChapterDao::new(db());
-    match dao.delete_by_book(&book_url) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_chapters(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookChapterDao::new(conn).delete_by_book(&book_url).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -418,7 +394,7 @@ pub fn delete_chapters(book_url: String) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_book_groups() -> ApiResponse<Vec<BookGroup>> {
-    let dao = BookGroupDao::new(db());
+    let dao = BookGroupDao::new(db().as_conn());
     match dao.get_all() {
         Ok(groups) => ApiResponse {
             success: true,
@@ -435,7 +411,7 @@ pub fn get_book_groups() -> ApiResponse<Vec<BookGroup>> {
 
 #[tauri::command]
 pub fn add_book_group(group: BookGroup) -> ApiResponse<()> {
-    let dao = BookGroupDao::new(db());
+    let dao = BookGroupDao::new(db().as_conn());
     match dao.insert(&group) {
         Ok(_) => ApiResponse {
             success: true,
@@ -452,7 +428,7 @@ pub fn add_book_group(group: BookGroup) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn update_book_group(group: BookGroup) -> ApiResponse<()> {
-    let dao = BookGroupDao::new(db());
+    let dao = BookGroupDao::new(db().as_conn());
     match dao.update(&group) {
         Ok(_) => ApiResponse {
             success: true,
@@ -469,7 +445,7 @@ pub fn update_book_group(group: BookGroup) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_book_group(group_id: i64) -> ApiResponse<()> {
-    let dao = BookGroupDao::new(db());
+    let dao = BookGroupDao::new(db().as_conn());
     match dao.delete(group_id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -490,7 +466,7 @@ pub fn delete_book_group(group_id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_replace_rules() -> ApiResponse<Vec<ReplaceRule>> {
-    let dao = ReplaceRuleDao::new(db());
+    let dao = ReplaceRuleDao::new(db().as_conn());
     match dao.get_all() {
         Ok(rules) => ApiResponse {
             success: true,
@@ -507,7 +483,7 @@ pub fn get_replace_rules() -> ApiResponse<Vec<ReplaceRule>> {
 
 #[tauri::command]
 pub fn add_replace_rule(rule: ReplaceRule) -> ApiResponse<i64> {
-    let dao = ReplaceRuleDao::new(db());
+    let dao = ReplaceRuleDao::new(db().as_conn());
     match dao.insert(&rule) {
         Ok(id) => ApiResponse {
             success: true,
@@ -524,7 +500,7 @@ pub fn add_replace_rule(rule: ReplaceRule) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_replace_rule(rule: ReplaceRule) -> ApiResponse<()> {
-    let dao = ReplaceRuleDao::new(db());
+    let dao = ReplaceRuleDao::new(db().as_conn());
     match dao.update(&rule) {
         Ok(_) => ApiResponse {
             success: true,
@@ -541,7 +517,7 @@ pub fn update_replace_rule(rule: ReplaceRule) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_replace_rule(id: i64) -> ApiResponse<()> {
-    let dao = ReplaceRuleDao::new(db());
+    let dao = ReplaceRuleDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -562,7 +538,7 @@ pub fn delete_replace_rule(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn add_search_keyword(keyword: String) -> ApiResponse<()> {
-    let dao = SearchKeywordDao::new(db());
+    let dao = SearchKeywordDao::new(db().as_conn());
     match dao.insert_or_update(&keyword) {
         Ok(_) => ApiResponse {
             success: true,
@@ -579,7 +555,7 @@ pub fn add_search_keyword(keyword: String) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_search_keywords(limit: Option<i64>) -> ApiResponse<Vec<SearchKeyword>> {
-    let dao = SearchKeywordDao::new(db());
+    let dao = SearchKeywordDao::new(db().as_conn());
     match dao.get_recent(limit.unwrap_or(20)) {
         Ok(keywords) => ApiResponse {
             success: true,
@@ -596,7 +572,7 @@ pub fn get_search_keywords(limit: Option<i64>) -> ApiResponse<Vec<SearchKeyword>
 
 #[tauri::command]
 pub fn clear_search_keywords() -> ApiResponse<()> {
-    let dao = SearchKeywordDao::new(db());
+    let dao = SearchKeywordDao::new(db().as_conn());
     match dao.clear() {
         Ok(_) => ApiResponse {
             success: true,
@@ -617,7 +593,7 @@ pub fn clear_search_keywords() -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn set_cookie(url: String, cookie: String) -> ApiResponse<()> {
-    let dao = CookieDao::new(db());
+    let dao = CookieDao::new(db().as_conn());
     match dao.insert_or_update(&url, &cookie) {
         Ok(_) => ApiResponse {
             success: true,
@@ -634,7 +610,7 @@ pub fn set_cookie(url: String, cookie: String) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_cookie(url: String) -> ApiResponse<Option<String>> {
-    let dao = CookieDao::new(db());
+    let dao = CookieDao::new(db().as_conn());
     match dao.get(&url) {
         Ok(cookie) => ApiResponse {
             success: true,
@@ -651,7 +627,7 @@ pub fn get_cookie(url: String) -> ApiResponse<Option<String>> {
 
 #[tauri::command]
 pub fn delete_cookie(url: String) -> ApiResponse<()> {
-    let dao = CookieDao::new(db());
+    let dao = CookieDao::new(db().as_conn());
     match dao.delete(&url) {
         Ok(_) => ApiResponse {
             success: true,
@@ -672,7 +648,7 @@ pub fn delete_cookie(url: String) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn set_cache(key: String, value: String, deadline: Option<i64>) -> ApiResponse<()> {
-    let dao = CacheDao::new(db());
+    let dao = CacheDao::new(db().as_conn());
     match dao.put(&key, &value, deadline.unwrap_or(0)) {
         Ok(_) => ApiResponse {
             success: true,
@@ -689,7 +665,7 @@ pub fn set_cache(key: String, value: String, deadline: Option<i64>) -> ApiRespon
 
 #[tauri::command]
 pub fn get_cache(key: String) -> ApiResponse<Option<String>> {
-    let dao = CacheDao::new(db());
+    let dao = CacheDao::new(db().as_conn());
     match dao.get(&key) {
         Ok(value) => ApiResponse {
             success: true,
@@ -706,7 +682,7 @@ pub fn get_cache(key: String) -> ApiResponse<Option<String>> {
 
 #[tauri::command]
 pub fn delete_cache(key: String) -> ApiResponse<()> {
-    let dao = CacheDao::new(db());
+    let dao = CacheDao::new(db().as_conn());
     match dao.delete(&key) {
         Ok(_) => ApiResponse {
             success: true,
@@ -727,7 +703,7 @@ pub fn delete_cache(key: String) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn add_bookmark(bookmark: Bookmark) -> ApiResponse<i64> {
-    let dao = BookmarkDao::new(db());
+    let dao = BookmarkDao::new(db().as_conn());
     match dao.insert(&bookmark) {
         Ok(id) => ApiResponse {
             success: true,
@@ -744,7 +720,7 @@ pub fn add_bookmark(bookmark: Bookmark) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_bookmark(bookmark: Bookmark) -> ApiResponse<()> {
-    let dao = BookmarkDao::new(db());
+    let dao = BookmarkDao::new(db().as_conn());
     match dao.update(&bookmark) {
         Ok(_) => ApiResponse {
             success: true,
@@ -761,7 +737,7 @@ pub fn update_bookmark(bookmark: Bookmark) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_bookmark(id: i64) -> ApiResponse<()> {
-    let dao = BookmarkDao::new(db());
+    let dao = BookmarkDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -778,7 +754,7 @@ pub fn delete_bookmark(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_bookmarks(book_url: String) -> ApiResponse<Vec<Bookmark>> {
-    let dao = BookmarkDao::new(db());
+    let dao = BookmarkDao::new(db().as_conn());
     match dao.get_by_book(&book_url) {
         Ok(bookmarks) => ApiResponse {
             success: true,
@@ -799,7 +775,7 @@ pub fn get_bookmarks(book_url: String) -> ApiResponse<Vec<Bookmark>> {
 
 #[tauri::command]
 pub fn add_read_record(record: ReadRecord) -> ApiResponse<()> {
-    let dao = ReadRecordDao::new(db());
+    let dao = ReadRecordDao::new(db().as_conn());
     match dao.upsert(&record) {
         Ok(_) => ApiResponse {
             success: true,
@@ -816,7 +792,7 @@ pub fn add_read_record(record: ReadRecord) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_read_records() -> ApiResponse<Vec<ReadRecord>> {
-    let dao = ReadRecordDao::new(db());
+    let dao = ReadRecordDao::new(db().as_conn());
     match dao.get_all() {
         Ok(records) => ApiResponse {
             success: true,
@@ -833,7 +809,7 @@ pub fn get_read_records() -> ApiResponse<Vec<ReadRecord>> {
 
 #[tauri::command]
 pub fn delete_read_record(book_name: String) -> ApiResponse<()> {
-    let dao = ReadRecordDao::new(db());
+    let dao = ReadRecordDao::new(db().as_conn());
     match dao.delete(&book_name) {
         Ok(_) => ApiResponse {
             success: true,
@@ -854,7 +830,7 @@ pub fn delete_read_record(book_name: String) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_http_tts_list() -> ApiResponse<Vec<HttpTTS>> {
-    let dao = HttpTTSDao::new(db());
+    let dao = HttpTTSDao::new(db().as_conn());
     match dao.get_all() {
         Ok(list) => ApiResponse {
             success: true,
@@ -871,7 +847,7 @@ pub fn get_http_tts_list() -> ApiResponse<Vec<HttpTTS>> {
 
 #[tauri::command]
 pub fn add_http_tts(tts: HttpTTS) -> ApiResponse<i64> {
-    let dao = HttpTTSDao::new(db());
+    let dao = HttpTTSDao::new(db().as_conn());
     match dao.insert(&tts) {
         Ok(id) => ApiResponse {
             success: true,
@@ -888,7 +864,7 @@ pub fn add_http_tts(tts: HttpTTS) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_http_tts(tts: HttpTTS) -> ApiResponse<()> {
-    let dao = HttpTTSDao::new(db());
+    let dao = HttpTTSDao::new(db().as_conn());
     match dao.update(&tts) {
         Ok(_) => ApiResponse {
             success: true,
@@ -905,7 +881,7 @@ pub fn update_http_tts(tts: HttpTTS) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_http_tts(id: i64) -> ApiResponse<()> {
-    let dao = HttpTTSDao::new(db());
+    let dao = HttpTTSDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -926,7 +902,7 @@ pub fn delete_http_tts(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_rss_sources() -> ApiResponse<Vec<RssSource>> {
-    let dao = RssSourceDao::new(db());
+    let dao = RssSourceDao::new(db().as_conn());
     match dao.get_all() {
         Ok(sources) => ApiResponse {
             success: true,
@@ -943,7 +919,7 @@ pub fn get_rss_sources() -> ApiResponse<Vec<RssSource>> {
 
 #[tauri::command]
 pub fn add_rss_source(source: RssSource) -> ApiResponse<()> {
-    let dao = RssSourceDao::new(db());
+    let dao = RssSourceDao::new(db().as_conn());
     match dao.insert(&source) {
         Ok(_) => ApiResponse {
             success: true,
@@ -960,7 +936,7 @@ pub fn add_rss_source(source: RssSource) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn update_rss_source(source: RssSource) -> ApiResponse<()> {
-    let dao = RssSourceDao::new(db());
+    let dao = RssSourceDao::new(db().as_conn());
     match dao.update(&source) {
         Ok(_) => ApiResponse {
             success: true,
@@ -977,7 +953,7 @@ pub fn update_rss_source(source: RssSource) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_rss_source(url: String) -> ApiResponse<()> {
-    let dao = RssSourceDao::new(db());
+    let dao = RssSourceDao::new(db().as_conn());
     match dao.delete(&url) {
         Ok(_) => ApiResponse {
             success: true,
@@ -998,7 +974,7 @@ pub fn delete_rss_source(url: String) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_rss_articles(origin: String) -> ApiResponse<Vec<RssArticle>> {
-    let dao = RssArticleDao::new(db());
+    let dao = RssArticleDao::new(db().as_conn());
     match dao.get_by_origin(&origin) {
         Ok(articles) => ApiResponse {
             success: true,
@@ -1015,7 +991,7 @@ pub fn get_rss_articles(origin: String) -> ApiResponse<Vec<RssArticle>> {
 
 #[tauri::command]
 pub fn add_rss_articles(articles: Vec<RssArticle>) -> ApiResponse<()> {
-    let dao = RssArticleDao::new(db());
+    let dao = RssArticleDao::new(db().as_conn());
     match dao.insert_many(&articles) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1030,73 +1006,275 @@ pub fn add_rss_articles(articles: Vec<RssArticle>) -> ApiResponse<()> {
     }
 }
 
+fn apply_custom_headers(
+    mut request: reqwest::RequestBuilder,
+    header: &Option<String>,
+) -> reqwest::RequestBuilder {
+    let Some(raw_header) = header.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return request;
+    };
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(raw_header) {
+        if let Some(obj) = value.as_object() {
+            for (key, value) in obj {
+                if let Some(header_value) = value.as_str() {
+                    request = request.header(key.as_str(), header_value);
+                }
+            }
+        }
+        return request;
+    }
+
+    for line in raw_header.lines() {
+        if let Some((key, value)) = line.split_once(':') {
+            request = request.header(key.trim(), value.trim());
+        }
+    }
+    request
+}
+
+async fn fetch_rss_source_text(source: &RssSource) -> Result<String, String> {
+    let parsed = url::Url::parse(&source.source_url).map_err(|e| format!("Invalid URL: {}", e))?;
+    if parsed.scheme() != "http" && parsed.scheme() != "https" {
+        return Err(format!("Unsupported URL scheme: {}", parsed.scheme()));
+    }
+
+    let client = crate::http::async_client();
+
+    let request = client
+        .get(source.source_url.as_str())
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+    let request = apply_custom_headers(request, &source.header);
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Read response failed: {}", e))
+}
+
+fn decode_html_entities(value: &str) -> String {
+    let text = value
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'");
+    let numeric_re = regex::Regex::new(r"&#(x[0-9A-Fa-f]+|\d+);").unwrap();
+    numeric_re
+        .replace_all(&text, |caps: &regex::Captures<'_>| {
+            let raw = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let parsed = if let Some(hex) = raw.strip_prefix('x') {
+                u32::from_str_radix(hex, 16).ok()
+            } else {
+                raw.parse::<u32>().ok()
+            };
+            parsed
+                .and_then(char::from_u32)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| caps.get(0).map(|m| m.as_str()).unwrap_or("").to_string())
+        })
+        .into_owned()
+}
+
+fn clean_feed_text(value: &str) -> String {
+    let mut text = value.trim().to_string();
+    if text.starts_with("<![CDATA[") && text.ends_with("]]>") {
+        text = text
+            .trim_start_matches("<![CDATA[")
+            .trim_end_matches("]]>")
+            .to_string();
+    }
+    let tag_re = regex::Regex::new(r"(?is)<[^>]+>").unwrap();
+    decode_html_entities(&tag_re.replace_all(&text, ""))
+        .trim()
+        .to_string()
+}
+
+fn extract_tag_text(block: &str, tag: &str) -> Option<String> {
+    let pattern = format!(
+        r"(?is)<{}(?:\s[^>]*)?>(.*?)</{}>",
+        regex::escape(tag),
+        regex::escape(tag)
+    );
+    regex::Regex::new(&pattern)
+        .ok()?
+        .captures(block)
+        .and_then(|caps| caps.get(1))
+        .map(|m| clean_feed_text(m.as_str()))
+        .filter(|s| !s.is_empty())
+}
+
+fn extract_first_tag_text(block: &str, tags: &[&str]) -> Option<String> {
+    tags.iter().find_map(|tag| extract_tag_text(block, tag))
+}
+
+fn extract_attr(attrs: &str, name: &str) -> Option<String> {
+    let pattern = format!(r#"(?is)\b{}\s*=\s*["']([^"']+)["']"#, regex::escape(name));
+    regex::Regex::new(&pattern)
+        .ok()?
+        .captures(attrs)
+        .and_then(|caps| caps.get(1))
+        .map(|m| decode_html_entities(m.as_str()).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn extract_atom_link(block: &str) -> Option<String> {
+    let link_re = regex::Regex::new(r#"(?is)<link\b([^>]*)/?>"#).unwrap();
+    let mut first_href = None;
+
+    for caps in link_re.captures_iter(block) {
+        let attrs = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let href = extract_attr(attrs, "href");
+        if first_href.is_none() {
+            first_href = href.clone();
+        }
+        let rel = extract_attr(attrs, "rel").unwrap_or_default();
+        if rel.eq_ignore_ascii_case("alternate") && href.is_some() {
+            return href;
+        }
+    }
+
+    first_href.or_else(|| extract_tag_text(block, "link"))
+}
+
+fn json_feed_articles(origin: &str, text: &str) -> Option<Vec<RssArticle>> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let items = value
+        .get("items")
+        .and_then(|items| items.as_array())
+        .or_else(|| value.as_array())?;
+
+    let articles = items
+        .iter()
+        .filter_map(|item| {
+            let obj = item.as_object()?;
+            let title = str_field(obj, &["title"])
+                .or_else(|| str_field(obj, &["name"]))
+                .or_else(|| str_field(obj, &["url"]))
+                .unwrap_or_else(|| "Untitled".to_string());
+            let link = str_field(obj, &["url", "external_url", "link"]);
+            let description = str_field(obj, &["summary", "description"]);
+            let content = str_field(obj, &["content_html", "content_text", "content"]);
+            let pub_date = str_field(
+                obj,
+                &["date_published", "date_modified", "published", "updated"],
+            );
+            Some(RssArticle {
+                id: None,
+                origin: origin.to_string(),
+                sort: None,
+                title,
+                content,
+                description,
+                link,
+                pub_date,
+                variable: None,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Some(articles)
+}
+
+fn xml_feed_articles(origin: &str, text: &str) -> Vec<RssArticle> {
+    let mut articles = Vec::new();
+    let item_re = regex::Regex::new(r"(?is)<item\b[^>]*>(.*?)</item>").unwrap();
+    for caps in item_re.captures_iter(text) {
+        let block = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let link = extract_first_tag_text(block, &["link", "guid"]);
+        let title = extract_first_tag_text(block, &["title"])
+            .or_else(|| link.clone())
+            .unwrap_or_else(|| "Untitled".to_string());
+        articles.push(RssArticle {
+            id: None,
+            origin: origin.to_string(),
+            sort: None,
+            title,
+            content: extract_first_tag_text(block, &["content:encoded", "content"]),
+            description: extract_first_tag_text(block, &["description", "summary"]),
+            link,
+            pub_date: extract_first_tag_text(
+                block,
+                &["pubDate", "published", "updated", "dc:date"],
+            ),
+            variable: None,
+        });
+    }
+
+    let entry_re = regex::Regex::new(r"(?is)<entry\b[^>]*>(.*?)</entry>").unwrap();
+    for caps in entry_re.captures_iter(text) {
+        let block = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+        let link = extract_atom_link(block);
+        let title = extract_first_tag_text(block, &["title"])
+            .or_else(|| link.clone())
+            .unwrap_or_else(|| "Untitled".to_string());
+        articles.push(RssArticle {
+            id: None,
+            origin: origin.to_string(),
+            sort: None,
+            title,
+            content: extract_first_tag_text(block, &["content", "content:encoded"]),
+            description: extract_first_tag_text(block, &["summary", "description"]),
+            link,
+            pub_date: extract_first_tag_text(
+                block,
+                &["published", "updated", "pubDate", "dc:date"],
+            ),
+            variable: None,
+        });
+    }
+
+    articles
+}
+
+fn parse_feed_articles(origin: &str, text: &str) -> Vec<RssArticle> {
+    json_feed_articles(origin, text).unwrap_or_else(|| xml_feed_articles(origin, text))
+}
+
 #[tauri::command]
-pub async fn fetch_rss_articles(origin: String) -> ApiResponse<()> {
-    let source_dao = RssSourceDao::new(db());
-    let source = match source_dao.get(&origin) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return ApiResponse {
-                success: false,
-                data: None,
-                error: Some("Source not found".to_string()),
-            }
-        }
-        Err(e) => {
-            return ApiResponse {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            }
-        }
+pub async fn fetch_rss_articles(
+    app_handle: tauri::AppHandle,
+    origin: String,
+) -> ApiResponse<()> {
+    let pool = {
+        let state: tauri::State<'_, crate::state::AppState> =
+            <tauri::AppHandle as tauri::Manager<tauri::Wry>>::state::<crate::state::AppState>(
+                &app_handle,
+            );
+        state.db.clone()
+    };
+    let obj = match pool.get().await {
+        Ok(o) => o,
+        Err(e) => return err(format!("DB pool error: {}", e)),
+    };
+
+    let origin_for_query = origin.clone();
+    let source = match obj
+        .interact(move |conn| RssSourceDao::new(conn).get(&origin_for_query))
+        .await
+    {
+        Ok(Ok(Some(s))) => s,
+        Ok(Ok(None)) => return err("Source not found"),
+        Ok(Err(e)) => return err(e.to_string()),
+        Err(e) => return err(format!("DB interact error: {}", e)),
     };
 
     if source.single_url {
-        // Fetch HTML content
-        let client = match reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                return ApiResponse {
-                    success: false,
-                    data: None,
-                    error: Some(format!("HTTP client error: {}", e)),
-                }
-            }
+        let text = match fetch_rss_source_text(&source).await {
+            Ok(text) => text,
+            Err(e) => return err(e),
         };
 
-        let text = match client
-            .get(&origin)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-            .send()
-            .await
-        {
-            Ok(resp) => match resp.text().await {
-                Ok(t) => t,
-                Err(e) => {
-                    return ApiResponse {
-                        success: false,
-                        data: None,
-                        error: Some(format!("Read response failed: {}", e)),
-                    }
-                }
-            },
-            Err(e) => {
-                return ApiResponse {
-                    success: false,
-                    data: None,
-                    error: Some(format!("Request failed: {}", e)),
-                }
-            }
-        };
-
-        // Delete old articles for this origin
-        let article_dao = RssArticleDao::new(db());
-        let _ = article_dao.delete_by_origin(&origin);
-
-        // Insert new article with HTML content
         let article = RssArticle {
             id: None,
             origin: origin.clone(),
@@ -1109,23 +1287,53 @@ pub async fn fetch_rss_articles(origin: String) -> ApiResponse<()> {
             variable: None,
         };
 
-        if let Err(e) = article_dao.insert(&article) {
-            return ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Save article failed: {}", e)),
-            };
+        let origin_for_save = origin.clone();
+        let save_result = obj
+            .interact(move |conn| -> rusqlite::Result<()> {
+                let article_dao = RssArticleDao::new(conn);
+                let _ = article_dao.delete_by_origin(&origin_for_save);
+                article_dao.insert(&article).map(|_| ())
+            })
+            .await;
+        match save_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return err(format!("Save article failed: {}", e)),
+            Err(e) => return err(format!("DB interact error: {}", e)),
+        }
+    } else {
+        let text = match fetch_rss_source_text(&source).await {
+            Ok(text) => text,
+            Err(e) => return err(e),
+        };
+        let articles = parse_feed_articles(&origin, &text);
+        if articles.is_empty() {
+            return err("No RSS/Atom articles found");
+        }
+
+        let origin_for_save = origin.clone();
+        let save_result = obj
+            .interact(move |conn| -> rusqlite::Result<()> {
+                let article_dao = RssArticleDao::new(conn);
+                let _ = article_dao.delete_by_origin(&origin_for_save);
+                article_dao.insert_many(&articles)
+            })
+            .await;
+        match save_result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return err(format!("Save articles failed: {}", e)),
+            Err(e) => return err(format!("DB interact error: {}", e)),
         }
     }
 
-    // Update last_update_time
     let mut updated = source.clone();
     updated.last_update_time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64;
 
-    let _ = source_dao.update(&updated);
+    let _ = obj
+        .interact(move |conn| RssSourceDao::new(conn).update(&updated))
+        .await;
 
     ApiResponse {
         success: true,
@@ -1134,15 +1342,26 @@ pub async fn fetch_rss_articles(origin: String) -> ApiResponse<()> {
     }
 }
 
+fn parse_import_link_href(href: &str) -> Option<(String, String)> {
+    let decoded = decode_html_entities(href);
+    let href = decoded.as_str();
+    let rest = href
+        .strip_prefix("legado://import/")
+        .or_else(|| href.strip_prefix("yuedu://import/"))?;
+    let (link_type, query) = rest.split_once('?')?;
+    let source_url = url::form_urlencoded::parse(query.as_bytes())
+        .find_map(|(key, value)| (key == "src").then(|| value.into_owned()))?;
+    if link_type.is_empty() || source_url.is_empty() {
+        return None;
+    }
+    Some((link_type.to_string(), source_url))
+}
+
 fn parse_import_links(html: &str) -> Vec<SourceLink> {
-    use regex::Regex;
     use scraper::{Html, Selector};
 
     let document = Html::parse_document(html);
     let selector = Selector::parse("a[href]").unwrap();
-
-    let legado_re = Regex::new(r"^legado://import/([^?]+)\?src=(.+)$").unwrap();
-    let yuedu_re = Regex::new(r"^yuedu://import/([^?]+)\?src=(.+)$").unwrap();
 
     let mut links = Vec::new();
 
@@ -1151,26 +1370,7 @@ fn parse_import_links(html: &str) -> Vec<SourceLink> {
         let label = element.text().collect::<String>().trim().to_string();
         let label = if label.is_empty() { None } else { Some(label) };
 
-        if let Some(caps) = legado_re.captures(&href) {
-            let link_type = caps
-                .get(1)
-                .map(|m| m.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let source_url = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
-            links.push(SourceLink {
-                raw_url: href,
-                source_url,
-                link_type,
-                label,
-            });
-        } else if let Some(caps) = yuedu_re.captures(&href) {
-            let link_type = caps
-                .get(1)
-                .map(|m| m.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let source_url = caps.get(2).map(|m| m.as_str()).unwrap_or("").to_string();
+        if let Some((link_type, source_url)) = parse_import_link_href(&href) {
             links.push(SourceLink {
                 raw_url: href,
                 source_url,
@@ -1192,11 +1392,24 @@ pub fn parse_source_links_from_html(html: String) -> ApiResponse<Vec<SourceLink>
     ok(parse_import_links(&html))
 }
 
+#[tauri::command]
+pub async fn fetch_import_page_html(url: String) -> ApiResponse<String> {
+    match fetch_text(&url).await {
+        Ok(html) => ok(html),
+        Err(e) => err(format!("Fetch failed: {}", e)),
+    }
+}
+
+#[tauri::command]
+pub async fn fetch_import_config_text(url: String) -> ApiResponse<String> {
+    match fetch_import_config_text_inner(&url).await {
+        Ok(text) => ok(text),
+        Err(e) => err(format!("Fetch failed: {}", e)),
+    }
+}
+
 async fn fetch_text(url: &str) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::http::async_client();
 
     let response = client
         .get(url)
@@ -1212,8 +1425,86 @@ async fn fetch_text(url: &str) -> Result<String, String> {
     response.text().await.map_err(|e| e.to_string())
 }
 
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let client = crate::http::async_client();
+
+    let response = client
+        .get(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|e| e.to_string())
+}
+
+async fn fetch_import_config_text_inner(url: &str) -> Result<String, String> {
+    let bytes = fetch_bytes(url).await?;
+    let is_zip = url.to_ascii_lowercase().ends_with(".zip") || bytes.starts_with(b"PK\x03\x04");
+    if is_zip {
+        return extract_json_from_zip(&bytes);
+    }
+    decode_utf8_lossy(bytes)
+}
+
+fn decode_utf8_lossy(bytes: Vec<u8>) -> Result<String, String> {
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(text),
+        Err(e) => Ok(String::from_utf8_lossy(&e.into_bytes()).into_owned()),
+    }
+}
+
+fn extract_json_from_zip(bytes: &[u8]) -> Result<String, String> {
+    let reader = Cursor::new(bytes);
+    let mut archive = zip::ZipArchive::new(reader).map_err(|e| e.to_string())?;
+    let mut fallback_index = None;
+
+    for index in 0..archive.len() {
+        let file = archive.by_index(index).map_err(|e| e.to_string())?;
+        if !file.is_file() {
+            continue;
+        }
+        let name = file.name().replace('\\', "/").to_ascii_lowercase();
+        if name.ends_with("readconfig.json") {
+            drop(file);
+            return read_zip_entry_to_string(&mut archive, index);
+        }
+        if fallback_index.is_none() && name.ends_with(".json") {
+            fallback_index = Some(index);
+        }
+    }
+
+    if let Some(index) = fallback_index {
+        read_zip_entry_to_string(&mut archive, index)
+    } else {
+        Err("No JSON file found in zip".to_string())
+    }
+}
+
+fn read_zip_entry_to_string(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    index: usize,
+) -> Result<String, String> {
+    let mut file = archive.by_index(index).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    decode_utf8_lossy(bytes)
+}
+
 async fn fetch_link_title(link_type: &str, url: &str) -> Result<String, String> {
-    let text = fetch_text(url).await?;
+    let text = if link_type == "readConfig" {
+        fetch_import_config_text_inner(url).await?
+    } else {
+        fetch_text(url).await?
+    };
     let value: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("JSON parse error: {}", e))?;
 
@@ -1235,7 +1526,11 @@ async fn fetch_link_title(link_type: &str, url: &str) -> Result<String, String> 
             .get("sourceName")
             .or_else(|| obj.get("source_name"))
             .and_then(|v| v.as_str()),
-        "replaceRule" | "httpTTS" => obj.get("name").and_then(|v| v.as_str()),
+        "replaceRule" | "httpTTS" | "readConfig" => obj.get("name").and_then(|v| v.as_str()),
+        "theme" => obj
+            .get("themeName")
+            .or_else(|| obj.get("name"))
+            .and_then(|v| v.as_str()),
         _ => None,
     };
 
@@ -1247,7 +1542,14 @@ async fn fetch_link_title(link_type: &str, url: &str) -> Result<String, String> 
 
 #[tauri::command]
 pub async fn fetch_import_links_from_url(url: String) -> ApiResponse<Vec<SourceLink>> {
-    const SUPPORTED_TYPES: &[&str] = &["bookSource", "rssSource", "replaceRule", "httpTTS"];
+    const SUPPORTED_TYPES: &[&str] = &[
+        "bookSource",
+        "rssSource",
+        "replaceRule",
+        "httpTTS",
+        "theme",
+        "readConfig",
+    ];
 
     match fetch_text(&url).await {
         Ok(html) => {
@@ -1287,7 +1589,7 @@ pub async fn fetch_import_links_from_url(url: String) -> ApiResponse<Vec<SourceL
 
 #[tauri::command]
 pub fn get_txt_toc_rules() -> ApiResponse<Vec<TxtTocRule>> {
-    let dao = TxtTocRuleDao::new(db());
+    let dao = TxtTocRuleDao::new(db().as_conn());
     match dao.get_all() {
         Ok(rules) => ApiResponse {
             success: true,
@@ -1304,7 +1606,7 @@ pub fn get_txt_toc_rules() -> ApiResponse<Vec<TxtTocRule>> {
 
 #[tauri::command]
 pub fn add_txt_toc_rule(rule: TxtTocRule) -> ApiResponse<i64> {
-    let dao = TxtTocRuleDao::new(db());
+    let dao = TxtTocRuleDao::new(db().as_conn());
     match dao.insert(&rule) {
         Ok(id) => ApiResponse {
             success: true,
@@ -1321,7 +1623,7 @@ pub fn add_txt_toc_rule(rule: TxtTocRule) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_txt_toc_rule(rule: TxtTocRule) -> ApiResponse<()> {
-    let dao = TxtTocRuleDao::new(db());
+    let dao = TxtTocRuleDao::new(db().as_conn());
     match dao.update(&rule) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1338,7 +1640,7 @@ pub fn update_txt_toc_rule(rule: TxtTocRule) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_txt_toc_rule(id: i64) -> ApiResponse<()> {
-    let dao = TxtTocRuleDao::new(db());
+    let dao = TxtTocRuleDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1359,7 +1661,7 @@ pub fn delete_txt_toc_rule(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_rule_subs() -> ApiResponse<Vec<RuleSub>> {
-    let dao = RuleSubDao::new(db());
+    let dao = RuleSubDao::new(db().as_conn());
     match dao.get_all() {
         Ok(subs) => ApiResponse {
             success: true,
@@ -1376,7 +1678,7 @@ pub fn get_rule_subs() -> ApiResponse<Vec<RuleSub>> {
 
 #[tauri::command]
 pub fn add_rule_sub(sub: RuleSub) -> ApiResponse<i64> {
-    let dao = RuleSubDao::new(db());
+    let dao = RuleSubDao::new(db().as_conn());
     match dao.insert(&sub) {
         Ok(id) => ApiResponse {
             success: true,
@@ -1393,7 +1695,7 @@ pub fn add_rule_sub(sub: RuleSub) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_rule_sub(sub: RuleSub) -> ApiResponse<()> {
-    let dao = RuleSubDao::new(db());
+    let dao = RuleSubDao::new(db().as_conn());
     match dao.update(&sub) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1410,7 +1712,7 @@ pub fn update_rule_sub(sub: RuleSub) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_rule_sub(id: i64) -> ApiResponse<()> {
-    let dao = RuleSubDao::new(db());
+    let dao = RuleSubDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1431,7 +1733,7 @@ pub fn delete_rule_sub(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_dict_rules() -> ApiResponse<Vec<DictRule>> {
-    let dao = DictRuleDao::new(db());
+    let dao = DictRuleDao::new(db().as_conn());
     match dao.get_all() {
         Ok(rules) => ApiResponse {
             success: true,
@@ -1448,7 +1750,7 @@ pub fn get_dict_rules() -> ApiResponse<Vec<DictRule>> {
 
 #[tauri::command]
 pub fn add_dict_rule(rule: DictRule) -> ApiResponse<i64> {
-    let dao = DictRuleDao::new(db());
+    let dao = DictRuleDao::new(db().as_conn());
     match dao.insert(&rule) {
         Ok(id) => ApiResponse {
             success: true,
@@ -1465,7 +1767,7 @@ pub fn add_dict_rule(rule: DictRule) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_dict_rule(rule: DictRule) -> ApiResponse<()> {
-    let dao = DictRuleDao::new(db());
+    let dao = DictRuleDao::new(db().as_conn());
     match dao.update(&rule) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1482,7 +1784,7 @@ pub fn update_dict_rule(rule: DictRule) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_dict_rule(id: i64) -> ApiResponse<()> {
-    let dao = DictRuleDao::new(db());
+    let dao = DictRuleDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1498,12 +1800,153 @@ pub fn delete_dict_rule(id: i64) -> ApiResponse<()> {
 }
 
 // ============================================================================
+// App File Management Commands
+// ============================================================================
+
+fn normalize_relative_path(relative_path: Option<String>) -> Result<PathBuf, String> {
+    let mut safe_path = PathBuf::new();
+    if let Some(path) = relative_path {
+        for component in Path::new(&path).components() {
+            match component {
+                Component::Normal(part) => safe_path.push(part),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err("Invalid path".to_string());
+                }
+            }
+        }
+    }
+    Ok(safe_path)
+}
+
+fn resolve_app_file_path(relative_path: Option<String>) -> Result<PathBuf, String> {
+    let root = app_dir();
+    let safe_path = normalize_relative_path(relative_path)?;
+    let target = root.join(safe_path);
+    let root_canon = root.canonicalize().map_err(|e| e.to_string())?;
+    let target_canon = if target.exists() {
+        target.canonicalize().map_err(|e| e.to_string())?
+    } else {
+        target
+    };
+    if target_canon.starts_with(&root_canon) {
+        Ok(target_canon)
+    } else {
+        Err("Path is outside app data directory".to_string())
+    }
+}
+
+fn path_to_relative(path: &Path) -> String {
+    path.strip_prefix(app_dir())
+        .ok()
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub fn list_app_files(relative_path: Option<String>) -> ApiResponse<ManagedFileList> {
+    let current = match resolve_app_file_path(relative_path) {
+        Ok(path) => path,
+        Err(e) => return err(e),
+    };
+    if !current.is_dir() {
+        return err("Path is not a directory");
+    }
+
+    let root = app_dir();
+    let parent_path = if current == *root {
+        None
+    } else {
+        current
+            .parent()
+            .filter(|parent| parent.starts_with(root))
+            .map(path_to_relative)
+    };
+
+    let mut files = Vec::new();
+    let entries = match std::fs::read_dir(&current) {
+        Ok(entries) => entries,
+        Err(e) => return err(e.to_string()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        files.push(ManagedFile {
+            name: entry.file_name().to_string_lossy().to_string(),
+            relative_path: path_to_relative(&path),
+            is_dir: metadata.is_dir(),
+            size: if metadata.is_dir() { 0 } else { metadata.len() },
+            modified,
+        });
+    }
+
+    files.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+
+    ok(ManagedFileList {
+        current_path: path_to_relative(&current),
+        parent_path,
+        files,
+    })
+}
+
+#[tauri::command]
+pub fn create_app_folder(relative_path: Option<String>, name: String) -> ApiResponse<()> {
+    let folder_name = name.trim();
+    if folder_name.is_empty() || folder_name.contains('/') || folder_name.contains('\\') {
+        return err("Invalid folder name");
+    }
+    let parent = match resolve_app_file_path(relative_path) {
+        Ok(path) => path,
+        Err(e) => return err(e),
+    };
+    if !parent.is_dir() {
+        return err("Parent path is not a directory");
+    }
+    match std::fs::create_dir(parent.join(folder_name)) {
+        Ok(_) => ok(()),
+        Err(e) => err(e.to_string()),
+    }
+}
+
+#[tauri::command]
+pub fn delete_app_file(relative_path: String) -> ApiResponse<()> {
+    let path = match resolve_app_file_path(Some(relative_path)) {
+        Ok(path) => path,
+        Err(e) => return err(e),
+    };
+    if path == *app_dir() {
+        return err("Cannot delete root directory");
+    }
+    let result = if path.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    };
+    match result {
+        Ok(_) => ok(()),
+        Err(e) => err(e.to_string()),
+    }
+}
+
+// ============================================================================
 // KeyboardAssist Commands
 // ============================================================================
 
 #[tauri::command]
 pub fn get_keyboard_assists() -> ApiResponse<Vec<KeyboardAssist>> {
-    let dao = KeyboardAssistDao::new(db());
+    let dao = KeyboardAssistDao::new(db().as_conn());
     match dao.get_all() {
         Ok(assists) => ApiResponse {
             success: true,
@@ -1520,7 +1963,7 @@ pub fn get_keyboard_assists() -> ApiResponse<Vec<KeyboardAssist>> {
 
 #[tauri::command]
 pub fn add_keyboard_assist(assist: KeyboardAssist) -> ApiResponse<i64> {
-    let dao = KeyboardAssistDao::new(db());
+    let dao = KeyboardAssistDao::new(db().as_conn());
     match dao.insert(&assist) {
         Ok(id) => ApiResponse {
             success: true,
@@ -1537,7 +1980,7 @@ pub fn add_keyboard_assist(assist: KeyboardAssist) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_keyboard_assist(assist: KeyboardAssist) -> ApiResponse<()> {
-    let dao = KeyboardAssistDao::new(db());
+    let dao = KeyboardAssistDao::new(db().as_conn());
     match dao.update(&assist) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1554,7 +1997,7 @@ pub fn update_keyboard_assist(assist: KeyboardAssist) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_keyboard_assist(id: i64) -> ApiResponse<()> {
-    let dao = KeyboardAssistDao::new(db());
+    let dao = KeyboardAssistDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1575,7 +2018,7 @@ pub fn delete_keyboard_assist(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_servers() -> ApiResponse<Vec<Server>> {
-    let dao = ServerDao::new(db());
+    let dao = ServerDao::new(db().as_conn());
     match dao.get_all() {
         Ok(servers) => ApiResponse {
             success: true,
@@ -1592,7 +2035,7 @@ pub fn get_servers() -> ApiResponse<Vec<Server>> {
 
 #[tauri::command]
 pub fn add_server(server: Server) -> ApiResponse<i64> {
-    let dao = ServerDao::new(db());
+    let dao = ServerDao::new(db().as_conn());
     match dao.insert(&server) {
         Ok(id) => ApiResponse {
             success: true,
@@ -1609,7 +2052,7 @@ pub fn add_server(server: Server) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn update_server(server: Server) -> ApiResponse<()> {
-    let dao = ServerDao::new(db());
+    let dao = ServerDao::new(db().as_conn());
     match dao.update(&server) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1626,7 +2069,7 @@ pub fn update_server(server: Server) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn delete_server(id: i64) -> ApiResponse<()> {
-    let dao = ServerDao::new(db());
+    let dao = ServerDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1647,7 +2090,7 @@ pub fn delete_server(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn get_rss_stars() -> ApiResponse<Vec<RssStar>> {
-    let dao = RssStarDao::new(db());
+    let dao = RssStarDao::new(db().as_conn());
     match dao.get_all() {
         Ok(stars) => ApiResponse {
             success: true,
@@ -1664,7 +2107,7 @@ pub fn get_rss_stars() -> ApiResponse<Vec<RssStar>> {
 
 #[tauri::command]
 pub fn add_rss_star(star: RssStar) -> ApiResponse<i64> {
-    let dao = RssStarDao::new(db());
+    let dao = RssStarDao::new(db().as_conn());
     match dao.insert(&star) {
         Ok(id) => ApiResponse {
             success: true,
@@ -1681,7 +2124,7 @@ pub fn add_rss_star(star: RssStar) -> ApiResponse<i64> {
 
 #[tauri::command]
 pub fn delete_rss_star(id: i64) -> ApiResponse<()> {
-    let dao = RssStarDao::new(db());
+    let dao = RssStarDao::new(db().as_conn());
     match dao.delete(id) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1702,7 +2145,7 @@ pub fn delete_rss_star(id: i64) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn mark_rss_read(record: RssReadRecord) -> ApiResponse<()> {
-    let dao = RssReadRecordDao::new(db());
+    let dao = RssReadRecordDao::new(db().as_conn());
     match dao.upsert(&record) {
         Ok(_) => ApiResponse {
             success: true,
@@ -1719,7 +2162,7 @@ pub fn mark_rss_read(record: RssReadRecord) -> ApiResponse<()> {
 
 #[tauri::command]
 pub fn is_rss_read(origin: String, article_id: i32) -> ApiResponse<bool> {
-    let dao = RssReadRecordDao::new(db());
+    let dao = RssReadRecordDao::new(db().as_conn());
     match dao.is_read(&origin, article_id) {
         Ok(read) => ApiResponse {
             success: true,
@@ -1736,7 +2179,7 @@ pub fn is_rss_read(origin: String, article_id: i32) -> ApiResponse<bool> {
 
 #[tauri::command]
 pub fn get_rss_read_article_ids(origin: String) -> ApiResponse<Vec<i32>> {
-    let dao = RssReadRecordDao::new(db());
+    let dao = RssReadRecordDao::new(db().as_conn());
     match dao.get_read_article_ids(&origin) {
         Ok(ids) => ApiResponse {
             success: true,
@@ -1762,8 +2205,7 @@ pub async fn search_books(
     page: Option<i32>,
 ) -> ApiResponse<Vec<SearchBook>> {
     match tokio::task::spawn_blocking(move || {
-        let js_state = JsExtState::new();
-        let web_book = WebBook::new(js_state);
+        let web_book = WebBook::new(JsExtState::global());
         web_book.search(&source, &key, page)
     })
     .await
@@ -1793,8 +2235,7 @@ pub async fn explore_books(
     page: Option<i32>,
 ) -> ApiResponse<Vec<SearchBook>> {
     match tokio::task::spawn_blocking(move || {
-        let js_state = JsExtState::new();
-        let web_book = WebBook::new(js_state);
+        let web_book = WebBook::new(JsExtState::global());
         web_book.explore(&source, &url, page)
     })
     .await
@@ -1820,8 +2261,7 @@ pub async fn explore_books(
 #[tauri::command]
 pub async fn fetch_book_info(source: BookSource, book: Book) -> ApiResponse<Book> {
     match tokio::task::spawn_blocking(move || {
-        let js_state = JsExtState::new();
-        let web_book = WebBook::new(js_state);
+        let web_book = WebBook::new(JsExtState::global());
         let mut book = book;
         web_book.get_book_info(&source, &mut book).map(|_| book)
     })
@@ -1848,8 +2288,7 @@ pub async fn fetch_book_info(source: BookSource, book: Book) -> ApiResponse<Book
 #[tauri::command]
 pub async fn fetch_chapter_list(source: BookSource, book: Book) -> ApiResponse<Vec<BookChapter>> {
     match tokio::task::spawn_blocking(move || {
-        let js_state = JsExtState::new();
-        let web_book = WebBook::new(js_state);
+        let web_book = WebBook::new(JsExtState::global());
         web_book.get_chapter_list(&source, &book)
     })
     .await
@@ -1879,8 +2318,7 @@ pub async fn fetch_chapter_content(
     chapter: BookChapter,
 ) -> ApiResponse<String> {
     match tokio::task::spawn_blocking(move || {
-        let js_state = JsExtState::new();
-        let web_book = WebBook::new(js_state);
+        let web_book = WebBook::new(JsExtState::global());
         web_book.get_content(&source, &book, &chapter)
     })
     .await
@@ -1963,7 +2401,7 @@ pub fn get_local_chapter_content(
     book_url: String,
     chapter_index: i32,
 ) -> ApiResponse<Option<String>> {
-    let dao = ChapterContentDao::new(db());
+    let dao = ChapterContentDao::new(db().as_conn());
     match dao.get(&book_url, chapter_index) {
         Ok(content) => ApiResponse {
             success: true,
@@ -1984,7 +2422,7 @@ pub fn save_local_chapter_content(
     chapter_index: i32,
     content: String,
 ) -> ApiResponse<()> {
-    let dao = ChapterContentDao::new(db());
+    let dao = ChapterContentDao::new(db().as_conn());
     match dao.save(&book_url, chapter_index, &content) {
         Ok(_) => ApiResponse {
             success: true,
@@ -2017,7 +2455,7 @@ fn debug_book_source_inner(
     book_url: Option<String>,
     chapter_url: Option<String>,
 ) -> ApiResponse<DebugResult> {
-    let js_state = JsExtState::new();
+    let js_state = JsExtState::global();
     let web_book = WebBook::new(js_state.clone());
 
     match step.as_str() {
@@ -2250,7 +2688,7 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
     }
 
     // Load source
-    let source_dao = BookSourceDao::new(db());
+    let source_dao = BookSourceDao::new(db().as_conn());
     let source = match source_dao.get(&book.origin) {
         Ok(Some(s)) => s,
         _ => {
@@ -2263,8 +2701,7 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
     };
 
     // Fetch latest chapter list from source
-    let js_state = JsExtState::new();
-    let web_book = WebBook::new(js_state);
+    let web_book = WebBook::new(JsExtState::global());
     let latest_chapters = match web_book.get_chapter_list(&source, &book) {
         Ok(chapters) => chapters,
         Err(e) => {
@@ -2277,7 +2714,7 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
     };
 
     // Load existing chapters from DB
-    let chapter_dao = BookChapterDao::new(db());
+    let chapter_dao = BookChapterDao::new(db().as_conn());
     let existing_chapters = match chapter_dao.get_chapters(&book.book_url) {
         Ok(chapters) => chapters,
         Err(e) => {
@@ -2304,7 +2741,7 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
     let book_url = book.book_url.clone();
 
     if has_update {
-        let mut conn = db().conn();
+        let conn: &mut rusqlite::Connection = db().as_mut_conn();
         let tx = match conn.transaction() {
             Ok(tx) => tx,
             Err(e) => {
@@ -2324,7 +2761,7 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
             };
         }
 
-        let book_dao = BookDao::new(db());
+        let book_dao = BookDao::new(db().as_conn());
         let mut updated_book = book;
         updated_book.total_chapter_num = latest_chapters.len() as i32;
         updated_book.latest_chapter_title = latest_title.clone();
@@ -2386,7 +2823,7 @@ pub struct CacheResult {
 
 fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiResponse<CacheResult> {
     // Load book
-    let book_dao = BookDao::new(db());
+    let book_dao = BookDao::new(db().as_conn());
     let book = match book_dao.get(&book_url) {
         Ok(Some(b)) => b,
         _ => {
@@ -2410,7 +2847,7 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
     }
 
     // Load source
-    let source_dao = BookSourceDao::new(db());
+    let source_dao = BookSourceDao::new(db().as_conn());
     let source = match source_dao.get(&book.origin) {
         Ok(Some(s)) => s,
         _ => {
@@ -2423,7 +2860,7 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
     };
 
     // Load chapters
-    let chapter_dao = BookChapterDao::new(db());
+    let chapter_dao = BookChapterDao::new(db().as_conn());
     let chapters = match chapter_dao.get_chapters(&book_url) {
         Ok(chapters) => chapters,
         Err(e) => {
@@ -2436,7 +2873,7 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
     };
 
     // Check which chapters are already cached
-    let content_dao = ChapterContentDao::new(db());
+    let content_dao = ChapterContentDao::new(db().as_conn());
     let mut uncached_chapters: Vec<&BookChapter> = Vec::new();
     for chapter in &chapters {
         match content_dao.exists(&book_url, chapter.index) {
@@ -2461,8 +2898,7 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
     }
 
     // Fetch and cache chapters
-    let js_state = JsExtState::new();
-    let web_book = WebBook::new(js_state);
+    let web_book = WebBook::new(JsExtState::global());
     let mut entries: Vec<(String, i32, String)> = Vec::new();
 
     for chapter in to_cache {
@@ -2843,6 +3279,7 @@ pub async fn restore_from_webdav(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Cursor, Write};
 
     #[test]
     fn parses_legado_import_links_from_index_html() {
@@ -2859,6 +3296,84 @@ mod tests {
         assert_eq!(links.len(), 5);
         assert_eq!(links[0].link_type, "bookSource");
         assert_eq!(links[3].source_url, "https://example.com/tts.json");
+    }
+
+    #[test]
+    fn extracts_read_config_json_from_zip() {
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            writer
+                .start_file("readConfig.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer
+                .write_all(r##"{"name":"番茄小说","textSize":17,"bgStr":"#ffded9c5"}"##.as_bytes())
+                .unwrap();
+            writer.finish().unwrap();
+        }
+
+        let text = extract_json_from_zip(&buffer.into_inner()).unwrap();
+
+        assert!(text.contains("番茄小说"));
+        assert!(text.contains("textSize"));
+    }
+
+    #[test]
+    fn decodes_import_link_src_query() {
+        let html = r#"
+            <a href="legado://import/rssSource?src=https%3A%2F%2Fexample.com%2Frss.json%3Fa%3D1%26b%3D2">一键导入</a>
+        "#;
+
+        let links = parse_import_links(html);
+
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].source_url, "https://example.com/rss.json?a=1&b=2");
+    }
+
+    #[test]
+    fn parses_rss_feed_articles() {
+        let xml = r#"
+            <rss><channel>
+              <item>
+                <title><![CDATA[第一篇]]></title>
+                <link>https://example.com/a</link>
+                <description>简介 &amp; 摘要</description>
+                <pubDate>Thu, 28 May 2026 00:00:00 GMT</pubDate>
+              </item>
+            </channel></rss>
+        "#;
+
+        let articles = parse_feed_articles("https://example.com/feed.xml", xml);
+
+        assert_eq!(articles.len(), 1);
+        assert_eq!(articles[0].title, "第一篇");
+        assert_eq!(articles[0].description.as_deref(), Some("简介 & 摘要"));
+    }
+
+    #[test]
+    fn parses_atom_feed_articles() {
+        let xml = r#"
+            <feed>
+              <entry>
+                <title>Atom Title</title>
+                <link rel="alternate" href="https://example.com/atom" />
+                <updated>2026-05-28T00:00:00Z</updated>
+                <summary>Atom summary</summary>
+              </entry>
+            </feed>
+        "#;
+
+        let articles = parse_feed_articles("https://example.com/atom.xml", xml);
+
+        assert_eq!(articles.len(), 1);
+        assert_eq!(
+            articles[0].link.as_deref(),
+            Some("https://example.com/atom")
+        );
+        assert_eq!(
+            articles[0].pub_date.as_deref(),
+            Some("2026-05-28T00:00:00Z")
+        );
     }
 
     #[test]
