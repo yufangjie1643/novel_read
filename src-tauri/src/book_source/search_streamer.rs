@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -95,8 +96,14 @@ pub async fn run_stream<S: SearchSink + 'static>(
         return;
     }
 
+    let succeeded = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let total_results = Arc::new(AtomicUsize::new(0));
+    let send_failures = Arc::new(AtomicUsize::new(0));
+
     let sem = Arc::new(Semaphore::new(MAX_CONCURRENCY));
-    let mut tasks = Vec::with_capacity(total);
+    let mut join_set = tokio::task::JoinSet::new();
+    let q_shared: Arc<str> = Arc::from(query);
 
     for src in sources {
         if *cancel.borrow() {
@@ -104,9 +111,13 @@ pub async fn run_stream<S: SearchSink + 'static>(
         }
         let sem = sem.clone();
         let sink = sink.clone();
-        let q = query.clone();
+        let q = q_shared.clone();
         let cancel_rx = cancel.clone();
-        tasks.push(tokio::spawn(async move {
+        let succeeded = succeeded.clone();
+        let failed = failed.clone();
+        let total_results = total_results.clone();
+        let send_failures = send_failures.clone();
+        join_set.spawn(async move {
             let _permit = match sem.acquire().await {
                 Ok(p) => p,
                 Err(_) => return,
@@ -114,15 +125,18 @@ pub async fn run_stream<S: SearchSink + 'static>(
             if *cancel_rx.borrow() {
                 return;
             }
-            let _ = sink.send(SearchEvent::SourceStarted {
+            if sink.send(SearchEvent::SourceStarted {
                 source_url: src.url.clone(),
                 source_name: src.name.clone(),
-            });
+            }).is_err() {
+                send_failures.fetch_add(1, Ordering::Relaxed);
+            }
             let t0 = std::time::Instant::now();
-            let outcome: Result<Vec<MockBook>, String> = if let Some(err) = &src.fail {
-                Err(err.clone())
+            let q_norm = q.to_lowercase();
+            let outcome: Result<Vec<MockBook>, (String, FailureKind)> = if let Some(err) = &src.fail {
+                let kind = if err == "timeout" { FailureKind::Timeout } else { FailureKind::Http };
+                Err((err.clone(), kind))
             } else {
-                let q_clone = q.clone();
                 let books_clone = src.books.clone();
                 let delay = src.delay_ms;
                 tokio::time::timeout(PER_SOURCE_TIMEOUT, async move {
@@ -130,19 +144,19 @@ pub async fn run_stream<S: SearchSink + 'static>(
                     Ok::<_, String>(books_clone).map(|b| {
                         b.into_iter()
                             .filter(|mb| {
-                                let q_norm = q_clone.to_lowercase();
                                 mb.name.to_lowercase().contains(&q_norm) || q_norm.is_empty()
                             })
                             .collect()
                     })
                 })
                 .await
-                .map_err(|_| "timeout".to_string())
-                .and_then(|r| r)
+                .map_err(|_| ("timeout".to_string(), FailureKind::Timeout))
+                .and_then(|r| r.map_err(|e| (e, FailureKind::Http)))
             };
             let latency_ms = t0.elapsed().as_millis() as u64;
             match outcome {
                 Ok(books) => {
+                    let mut count = 0usize;
                     for mb in books {
                         let mut book = crate::db::models::SearchBook::default();
                         book.name = mb.name;
@@ -157,46 +171,57 @@ pub async fn run_stream<S: SearchSink + 'static>(
                             word_position: 0,
                             source_health: 0,
                         };
-                        let _ = sink.send(SearchEvent::Result {
+                        if sink.send(SearchEvent::Result {
                             source_url: src.url.clone(),
                             book,
                             score,
-                        });
+                        }).is_ok() {
+                            count += 1;
+                            total_results.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            send_failures.fetch_add(1, Ordering::Relaxed);
+                        }
                     }
-                    let _ = sink.send(SearchEvent::SourceFinished {
+                    if sink.send(SearchEvent::SourceFinished {
                         source_url: src.url,
-                        count: 0,
+                        count,
                         latency_ms,
-                    });
+                    }).is_err() {
+                        send_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                    succeeded.fetch_add(1, Ordering::Relaxed);
                 }
-                Err(e) if e == "timeout" => {
-                    let _ = sink.send(SearchEvent::SourceFailed {
-                        source_url: src.url,
-                        error: "timeout".into(),
-                        latency_ms,
-                        kind: FailureKind::Timeout,
-                    });
-                }
-                Err(e) => {
-                    let _ = sink.send(SearchEvent::SourceFailed {
+                Err((e, kind)) => {
+                    if sink.send(SearchEvent::SourceFailed {
                         source_url: src.url,
                         error: e,
                         latency_ms,
-                        kind: FailureKind::Http,
-                    });
+                        kind,
+                    }).is_err() {
+                        send_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                    failed.fetch_add(1, Ordering::Relaxed);
                 }
             }
-        }));
+        });
     }
 
-    let _ = tokio::time::timeout(GLOBAL_TIMEOUT, futures::future::join_all(tasks)).await;
+    let _ = tokio::time::timeout(GLOBAL_TIMEOUT, async {
+        while let Some(_) = join_set.join_next().await {}
+    })
+    .await;
+
+    let sf = send_failures.load(Ordering::Relaxed);
+    if sf > 0 {
+        eprintln!("search_streamer: {sf} sink.send() failures");
+    }
 
     let duration_ms = started_at.elapsed().as_millis() as u64;
     let _ = sink.send(SearchEvent::Done {
         request_id,
-        succeeded: 0,
-        failed: 0,
-        total_results: 0,
+        succeeded: succeeded.load(Ordering::Relaxed),
+        failed: failed.load(Ordering::Relaxed),
+        total_results: total_results.load(Ordering::Relaxed),
         duration_ms,
     });
 }
@@ -241,7 +266,7 @@ mod tests {
             mk_source("b", vec![("Book B1", None)], 10),
         ];
         let (_tx, rx) = tokio::sync::watch::channel(false);
-        run_stream("test".to_string(), sources, sink.clone(), "req-1".to_string(), rx).await;
+        run_stream("".to_string(), sources, sink.clone(), "req-1".to_string(), rx).await;
         let events = sink.events.lock().unwrap();
         let started = events.iter().filter(|e| matches!(e, SearchEvent::Started { .. })).count();
         let finished = events.iter().filter(|e| matches!(e, SearchEvent::SourceFinished { .. })).count();
@@ -249,23 +274,41 @@ mod tests {
         assert_eq!(started, 1);
         assert_eq!(finished, 2);
         assert_eq!(done, 1);
+
+        let done_evt = events.iter().find(|e| matches!(e, SearchEvent::Done { .. })).unwrap();
+        if let SearchEvent::Done { succeeded, failed, total_results, .. } = done_evt {
+            assert_eq!(*succeeded, 2);
+            assert_eq!(*failed, 0);
+            assert_eq!(*total_results, 3);
+        }
+
+        let fin_a = events.iter().find(|e| matches!(e, SearchEvent::SourceFinished { source_url, .. } if source_url == "a")).unwrap();
+        if let SearchEvent::SourceFinished { count, .. } = fin_a {
+            assert_eq!(*count, 2);
+        }
     }
 
     #[tokio::test]
-    async fn one_source_times_out() {
+    async fn one_source_fails_early() {
         let sink = Arc::new(CollectingSink::default());
-        let mut slow = mk_source("slow", vec![("Book", None)], 5000);
-        slow.fail = Some("timeout".to_string());
+        let mut slow = mk_source("slow", vec![("Book", None)], 10);
+        slow.fail = Some("http error".to_string());
         let fast = mk_source("fast", vec![("Book", None)], 10);
         let sources = vec![slow, fast];
         let (_tx, rx) = tokio::sync::watch::channel(false);
-        run_stream("test".to_string(), sources, sink.clone(), "req-2".to_string(), rx).await;
+        run_stream("".to_string(), sources, sink.clone(), "req-2".to_string(), rx).await;
         let events = sink.events.lock().unwrap();
         let failures: Vec<&SearchEvent> = events
             .iter()
-            .filter(|e| matches!(e, SearchEvent::SourceFailed { kind: FailureKind::Timeout, .. }))
+            .filter(|e| matches!(e, SearchEvent::SourceFailed { kind: FailureKind::Http, .. }))
             .collect();
-        assert_eq!(failures.len(), 1, "expected exactly one timeout failure");
+        assert_eq!(failures.len(), 1, "expected exactly one http failure");
+
+        let done_evt = events.iter().find(|e| matches!(e, SearchEvent::Done { .. })).unwrap();
+        if let SearchEvent::Done { succeeded, failed, .. } = done_evt {
+            assert_eq!(*succeeded, 1);
+            assert_eq!(*failed, 1);
+        }
     }
 
     #[tokio::test]
@@ -293,5 +336,28 @@ mod tests {
         let events = sink.events.lock().unwrap();
         assert!(matches!(events.first().unwrap(), SearchEvent::Started { .. }));
         assert!(matches!(events.last().unwrap(), SearchEvent::Done { .. }));
+    }
+
+    #[tokio::test]
+    async fn real_timeout_path() {
+        let sink = Arc::new(CollectingSink::default());
+        let slow = mk_source("slow", vec![("Book", None)], 5000);
+        let fast = mk_source("fast", vec![("Book Fast", None)], 10);
+        let sources = vec![slow, fast];
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        run_stream("".to_string(), sources, sink.clone(), "req-5".to_string(), rx).await;
+        let events = sink.events.lock().unwrap();
+        let failures: Vec<&SearchEvent> = events
+            .iter()
+            .filter(|e| matches!(e, SearchEvent::SourceFailed { kind: FailureKind::Timeout, .. }))
+            .collect();
+        assert_eq!(failures.len(), 1, "expected exactly one real timeout failure");
+
+        let done_evt = events.iter().find(|e| matches!(e, SearchEvent::Done { .. })).unwrap();
+        if let SearchEvent::Done { succeeded, failed, total_results, .. } = done_evt {
+            assert_eq!(*succeeded, 1);
+            assert_eq!(*failed, 1);
+            assert_eq!(*total_results, 1);
+        }
     }
 }
