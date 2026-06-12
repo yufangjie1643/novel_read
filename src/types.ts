@@ -44,6 +44,11 @@ export interface ExploreItemsPage {
   total: number;
 }
 
+export interface ExploreKind {
+  title: string;
+  url?: string;
+}
+
 export interface SearchBook {
   name: string;
   author?: string;
@@ -201,6 +206,7 @@ export interface TxtTocRule {
   id?: number;
   name?: string;
   rule?: string;
+  example?: string;
   enabled: boolean;
   order: number;
 }
@@ -209,7 +215,23 @@ export interface DictRule {
   id?: number;
   name?: string;
   url?: string;
+  show_rule?: string;
   enabled: boolean;
+  sort_number: number;
+}
+
+export interface ManagedFile {
+  name: string;
+  relative_path: string;
+  is_dir: boolean;
+  size: number;
+  modified?: number;
+}
+
+export interface ManagedFileList {
+  current_path: string;
+  parent_path?: string;
+  files: ManagedFile[];
 }
 
 export interface KeyboardAssist {
@@ -238,4 +260,65 @@ export interface ApiResponse<T> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+// --- search-redesign: streaming + relevance (T5/T8) ---
+
+export type SourceKey = string;
+
+export type FailureKind = 'Timeout' | 'Http' | 'Parse';
+
+export interface ScoreBreakdown {
+  words: number;
+  typo: number;
+  proximity: number;
+  sourceWeight: number;
+  attributeRank: number;
+  wordPosition: number;
+  sourceHealth: number;
+}
+
+export type SearchEvent =
+  | { event: 'Started'; requestId: string; query: string; totalSources: number }
+  | { event: 'SourceStarted'; sourceUrl: SourceKey; sourceName: string }
+  | { event: 'Result'; sourceUrl: SourceKey; book: SearchBook; score: ScoreBreakdown }
+  | { event: 'SourceFinished'; sourceUrl: SourceKey; count: number; latencyMs: number }
+  | { event: 'SourceFailed'; sourceUrl: SourceKey; error: string; latencyMs: number; kind: FailureKind }
+  | { event: 'Done'; requestId: string; succeeded: number; failed: number; totalResults: number; durationMs: number };
+
+export type SourceStatus =
+  | { state: 'pending'; sourceUrl: SourceKey; sourceName: string }
+  | { state: 'running'; sourceUrl: SourceKey; sourceName: string }
+  | { state: 'ok'; sourceUrl: SourceKey; sourceName: string; count: number; latencyMs: number }
+  | { state: 'failed'; sourceUrl: SourceKey; sourceName: string; error: string; latencyMs: number; kind: FailureKind };
+
+export interface SearchFailure {
+  sourceUrl: SourceKey;
+  sourceName: string;
+  error: string;
+  kind: FailureKind;
+}
+
+export type SearchState =
+  | { kind: 'idle' }
+  | { kind: 'typing' }
+  | { kind: 'streaming'; query: string; results: SearchBook[]; statuses: Record<SourceKey, SourceStatus>; failures: SearchFailure[]; startedAt: number; requestId: string }
+  | { kind: 'stalled'; query: string; results: SearchBook[]; statuses: Record<SourceKey, SourceStatus>; failures: SearchFailure[]; startedAt: number; requestId: string; stalledSince: number }
+  | { kind: 'done'; query: string; results: SearchBook[]; statuses: Record<SourceKey, SourceStatus>; failures: SearchFailure[]; totalResults: number; durationMs: number; requestId: string }
+  | { kind: 'error'; message: string };
+
+export interface SourceStats {
+  sourceUrl: string;
+  totalQueries: number;
+  successfulQueries: number;
+  timedOutQueries: number;
+  erroredQueries: number;
+  totalLatencyMs: number;
+  lastSuccessAt: number | null;
+  lastErrorAt: number | null;
+  lastErrorMessage: string | null;
+  lastCheckedAt: number;
+  rollingSuccessCount: number;
+  rollingTotalCount: number;
+  healthScore: number;
 }

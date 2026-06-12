@@ -1,53 +1,260 @@
-import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useState, useEffect, useRef, useCallback, useTransition } from 'react';
+import { invoke, Channel } from '@tauri-apps/api/core';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { ApiResponse, BookSource, SearchBook, SearchKeyword, RuleSub } from '../types';
+import type {
+  ApiResponse,
+  BookSource,
+  SearchBook,
+  SearchEvent,
+  SearchFailure,
+  SearchKeyword,
+  SearchState,
+  ScoreBreakdown,
+  SourceKey,
+  SourceStatus,
+} from '../types';
+import { useUiMode } from '../uiMode';
+import SourceStatusStrip from '../components/search/SourceStatusStrip';
+import FailureFooter from '../components/search/FailureFooter';
+
+const ZERO_SCORE: ScoreBreakdown = {
+  words: 0,
+  typo: 0,
+  proximity: 255,
+  sourceWeight: 0,
+  attributeRank: 0,
+  wordPosition: 255,
+  sourceHealth: 0,
+};
+
+function compareScore(a: ScoreBreakdown, b: ScoreBreakdown): number {
+  if (a.words !== b.words) return b.words - a.words;
+  if (a.typo !== b.typo) return b.typo - a.typo;
+  if (a.proximity !== b.proximity) return a.proximity - b.proximity;
+  if (a.sourceWeight !== b.sourceWeight) return b.sourceWeight - a.sourceWeight;
+  if (a.attributeRank !== b.attributeRank) return b.attributeRank - a.attributeRank;
+  if (a.wordPosition !== b.wordPosition) return a.wordPosition - b.wordPosition;
+  return b.sourceHealth - a.sourceHealth;
+}
+
+type ActiveSearchState = Extract<SearchState, { kind: 'streaming' | 'stalled' | 'done' }>;
+
+function applyEvent(state: SearchState, event: SearchEvent, requestId: string): SearchState {
+  if (state.kind !== 'streaming' && state.kind !== 'stalled' && state.kind !== 'done') return state;
+  const active = state as ActiveSearchState;
+  if (active.requestId !== requestId) return state;
+
+  switch (event.event) {
+    case 'Started':
+      return state;
+    case 'SourceStarted': {
+      const statuses = { ...active.statuses };
+      statuses[event.sourceUrl] = {
+        state: 'running',
+        sourceUrl: event.sourceUrl,
+        sourceName: event.sourceName,
+      };
+      return { ...active, statuses };
+    }
+    case 'Result': {
+      const bookWithScore = { ...event.book, _score: event.score } as SearchBook & { _score: ScoreBreakdown };
+      return { ...active, results: [...active.results, bookWithScore as SearchBook] };
+    }
+    case 'SourceFinished': {
+      const statuses = { ...active.statuses };
+      const existing = active.statuses[event.sourceUrl];
+      statuses[event.sourceUrl] = {
+        state: 'ok',
+        sourceUrl: event.sourceUrl,
+        sourceName: existing?.sourceName ?? '',
+        count: event.count,
+        latencyMs: event.latencyMs,
+      };
+      return { ...active, statuses };
+    }
+    case 'SourceFailed': {
+      const statuses = { ...active.statuses };
+      const existing = active.statuses[event.sourceUrl];
+      const sourceName = existing?.sourceName ?? '';
+      statuses[event.sourceUrl] = {
+        state: 'failed',
+        sourceUrl: event.sourceUrl,
+        sourceName,
+        error: event.error,
+        latencyMs: event.latencyMs,
+        kind: event.kind,
+      };
+      const failure: SearchFailure = {
+        sourceUrl: event.sourceUrl,
+        sourceName,
+        error: event.error,
+        kind: event.kind,
+      };
+      return { ...active, statuses, failures: [...active.failures, failure] };
+    }
+    case 'Done': {
+      return { ...active, kind: 'done', totalResults: event.totalResults, durationMs: event.durationMs, requestId };
+    }
+  }
+}
+
+function openBook(
+  book: SearchBook,
+  sources: BookSource[],
+  navigate: ReturnType<typeof useNavigate>
+) {
+  const source = sources.find((s) => s.book_source_url === book.origin);
+  if (!source) return;
+  navigate(`/book/${encodeURIComponent(book.book_url)}`, {
+    state: { preview: true, source, searchBook: book },
+  });
+}
+
+function ResultCard({
+  book,
+  isMobileUi,
+  onClick,
+}: {
+  book: SearchBook;
+  isMobileUi: boolean;
+  onClick: () => void;
+}) {
+  // v1 of ResultCard: covers are eager; Task 7 will lazy-load.
+  // isMobileUi is reserved for future card-level layout tweaks.
+  void isMobileUi;
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        background: '#fff',
+        borderRadius: 14,
+        padding: 14,
+        display: 'flex',
+        gap: 14,
+        cursor: 'pointer',
+        boxShadow: '0 1px 2px rgba(0,0,0,0.06), 0 3px 10px rgba(0,0,0,0.04)',
+      }}
+    >
+      {book.cover_url ? (
+        <img
+          src={book.cover_url}
+          alt="cover"
+          style={{ width: 76, height: 96, objectFit: 'cover', borderRadius: 10, flexShrink: 0 }}
+        />
+      ) : (
+        <div
+          style={{
+            width: 76,
+            height: 96,
+            borderRadius: 10,
+            background: 'linear-gradient(145deg, #e8eaf6 0%, #f3e5f5 100%)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: '#5c6bc0',
+            fontSize: 18,
+            fontWeight: 800,
+            flexShrink: 0,
+          }}
+        >
+          {book.name.slice(0, 2)}
+        </div>
+      )}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, color: '#1a1a2e' }}>{book.name}</div>
+        <div style={{ color: '#8a8a9a', fontSize: 13, fontWeight: 500 }}>{book.author}</div>
+        {book.intro && (
+          <div
+            style={{
+              color: '#666',
+              fontSize: 12,
+              marginTop: 4,
+              lineHeight: 1.5,
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
+            {book.intro}
+          </div>
+        )}
+        <div style={{ color: '#bbb', fontSize: 11, fontWeight: 500, marginTop: 4 }}>
+          {book.origin_name || 'unknown'}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const sectionStyle = (mobile: boolean): React.CSSProperties => ({
+  background: '#fff',
+  borderRadius: 12,
+  padding: mobile ? 16 : 24,
+  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+  marginBottom: 24,
+});
+
+const inputStyle: React.CSSProperties = {
+  padding: '10px 14px',
+  borderRadius: 8,
+  border: '1px solid #e0e0e0',
+  fontSize: 14,
+  outline: 'none',
+  fontFamily: 'inherit',
+};
+
+const btnPrimary: React.CSSProperties = {
+  padding: '10px 18px',
+  borderRadius: 8,
+  border: 'none',
+  background: '#1976d2',
+  color: '#fff',
+  fontSize: 14,
+  fontWeight: 600,
+  cursor: 'pointer',
+};
+
+const chipStyle: React.CSSProperties = {
+  padding: '4px 12px',
+  borderRadius: 16,
+  border: '1px solid #e0e0e0',
+  background: '#f5f7fa',
+  cursor: 'pointer',
+  fontSize: 13,
+  color: '#555',
+  fontWeight: 500,
+};
+
+const chipDangerStyle: React.CSSProperties = {
+  ...chipStyle,
+  borderColor: '#ffcdd2',
+  background: '#fff0f0',
+  color: '#f44336',
+};
 
 export default function Home() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { isMobileUi } = useUiMode();
   const [sources, setSources] = useState<BookSource[]>([]);
   const [searchKey, setSearchKey] = useState('');
-  const [searchResults, setSearchResults] = useState<SearchBook[]>([]);
   const [searchHistory, setSearchHistory] = useState<SearchKeyword[]>([]);
-  const [ruleSubs, setRuleSubs] = useState<RuleSub[]>([]);
-  const [newSubUrl, setNewSubUrl] = useState('');
-  const [newSubName, setNewSubName] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
+  const [state, setState] = useState<SearchState>({ kind: 'idle' });
+  const [, startTransition] = useTransition();
+  const currentChannelRef = useRef<Channel<SearchEvent> | null>(null);
+  const currentRequestIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    loadSources();
-    loadSearchHistory();
-    loadRuleSubs();
-    // Restore previous search state from sessionStorage
-    const savedKey = sessionStorage.getItem('searchKey');
-    const savedResults = sessionStorage.getItem('searchResults');
-    if (savedKey) setSearchKey(savedKey);
-    if (savedResults) {
-      try {
-        setSearchResults(JSON.parse(savedResults));
-      } catch {
-        sessionStorage.removeItem('searchResults');
-      }
-    }
+    void loadSources();
+    void loadSearchHistory();
   }, []);
-
-  // Clear persisted search state when user clears the input
-  useEffect(() => {
-    if (!searchKey && searchResults.length === 0) {
-      sessionStorage.removeItem('searchKey');
-      sessionStorage.removeItem('searchResults');
-    }
-  }, [searchKey, searchResults]);
 
   async function loadSources() {
     try {
       const resp = await invoke<ApiResponse<BookSource[]>>('get_book_sources');
-      if (resp.success && resp.data) {
-        setSources(resp.data);
-      }
+      if (resp.success && resp.data) setSources(resp.data);
     } catch (e) {
       console.error('Failed to load sources:', e);
     }
@@ -55,23 +262,10 @@ export default function Home() {
 
   async function loadSearchHistory() {
     try {
-      const resp = await invoke<ApiResponse<SearchKeyword[]>>('get_search_keywords', {
-        limit: 10,
-      });
-      if (resp.success && resp.data) {
-        setSearchHistory(resp.data);
-      }
+      const resp = await invoke<ApiResponse<SearchKeyword[]>>('get_search_keywords', { limit: 10 });
+      if (resp.success && resp.data) setSearchHistory(resp.data);
     } catch (e) {
-      console.error('Failed to load search history:', e);
-    }
-  }
-
-  async function saveSearchKeyword(keyword: string) {
-    try {
-      await invoke('add_search_keyword', { keyword: keyword.trim() });
-      await loadSearchHistory();
-    } catch (e) {
-      console.error('Failed to save keyword:', e);
+      console.error('Failed to load history:', e);
     }
   }
 
@@ -84,215 +278,142 @@ export default function Home() {
     }
   }
 
-  async function loadRuleSubs() {
-    try {
-      const resp = await invoke<ApiResponse<RuleSub[]>>('get_rule_subs');
-      if (resp.success && resp.data) {
-        setRuleSubs(resp.data);
+  const handleSearch = useCallback(
+    async (q: string) => {
+      const trimmed = q.trim();
+      if (!trimmed) return;
+      const enabled = sources.filter((s) => s.enabled && s.search_url);
+      if (enabled.length === 0) {
+        setState({ kind: 'error', message: t('home.noEnabledSources') });
+        return;
       }
-    } catch (e) {
-      console.error('Failed to load rule subs:', e);
-    }
-  }
 
-  async function addRuleSub() {
-    if (!newSubUrl.trim() || !newSubName.trim()) return;
-    try {
-      await invoke('add_rule_sub', {
-        sub: {
-          name: newSubName.trim(),
-          url: newSubUrl.trim(),
-          sub_type: 0,
-          custom_order: 0,
-          enabled: true,
-          auto_update: true,
-          last_update_time: 0,
-        },
+      // Cancel previous channel. The Rust side will see the new request_id
+      // via the watch channel and stop emitting; the JS side just stops listening.
+      currentChannelRef.current = null;
+
+      const requestId = crypto.randomUUID();
+      currentRequestIdRef.current = requestId;
+      const channel = new Channel<SearchEvent>();
+      currentChannelRef.current = channel;
+
+      const initialStatuses: Record<SourceKey, SourceStatus> = {};
+      for (const s of enabled) {
+        initialStatuses[s.book_source_url] = {
+          state: 'pending',
+          sourceUrl: s.book_source_url,
+          sourceName: s.book_source_name,
+        };
+      }
+      setState({
+        kind: 'streaming',
+        query: trimmed,
+        results: [],
+        statuses: initialStatuses,
+        failures: [],
+        startedAt: Date.now(),
+        requestId,
       });
-      setNewSubUrl('');
-      setNewSubName('');
-      await loadRuleSubs();
-    } catch (e) {
-      setMessage(t('home.addSubscriptionFailed', { error: String(e) }));
-    }
-  }
 
-  async function deleteRuleSub(id: number) {
-    try {
-      await invoke('delete_rule_sub', { id });
-      await loadRuleSubs();
-    } catch (e) {
-      setMessage(t('home.deleteSubscriptionFailed', { error: String(e) }));
-    }
-  }
-
-  async function checkSubUpdates() {
-    setLoading(true);
-    setMessage(t('home.checkUpdates'));
-    for (const sub of ruleSubs.filter((s) => s.enabled && s.url)) {
-      try {
-        const resp = await invoke<ApiResponse<BookSource[]>>('import_source_from_url', {
-          url: sub.url,
+      channel.onmessage = (event) => {
+        if (currentRequestIdRef.current !== requestId) return; // stale
+        startTransition(() => {
+          setState((s) => applyEvent(s, event, requestId));
         });
-        if (resp.success && resp.data) {
-          for (const source of resp.data) {
-            await invoke('add_book_source', { source });
-          }
-        }
+      };
+
+      try {
+        await invoke('search_books_stream', {
+          query: trimmed,
+          sources: enabled,
+          channel,
+        });
       } catch (e) {
-        console.error(`Failed to update ${sub.name}:`, e);
-      }
-    }
-    setMessage(t('home.checkUpdates'));
-    setLoading(false);
-    await loadSources();
-  }
-
-  async function searchBooks() {
-    if (!searchKey.trim()) return;
-    const enabledSources = sources.filter((s) => s.enabled && s.search_url);
-    if (enabledSources.length === 0) {
-      setMessage(t('home.noEnabledSources'));
-      return;
-    }
-    setLoading(true);
-    setMessage(t('home.searchingSources', { count: enabledSources.length }));
-    setSearchResults([]);
-
-    const CONCURRENCY = Math.max(1, Math.min(20, parseInt(localStorage.getItem('search_concurrency') || '5', 10) || 5));
-    const allResults: SearchBook[] = [];
-    const seen = new Set<string>();
-
-    for (let i = 0; i < enabledSources.length; i += CONCURRENCY) {
-      const batch = enabledSources.slice(i, i + CONCURRENCY);
-      const batchResults = await Promise.allSettled(
-        batch.map(async (source) => {
-          const resp = await invoke<ApiResponse<SearchBook[]>>('search_books', {
-            source,
-            key: searchKey.trim(),
-            page: 1,
-          });
-          if (resp.success && resp.data) {
-            return resp.data;
-          }
-          return [];
-        })
-      );
-
-      for (const result of batchResults) {
-        if (result.status === 'fulfilled') {
-          for (const book of result.value) {
-            const key = `${book.name}|${book.author || ''}`;
-            if (!seen.has(key)) {
-              seen.add(key);
-              allResults.push(book);
-            }
-          }
+        if (currentRequestIdRef.current === requestId) {
+          setState({ kind: 'error', message: String(e) });
         }
       }
+    },
+    [sources, t]
+  );
 
-      setMessage(
-        t('home.searchingProgress', {
-          current: Math.min(i + CONCURRENCY, enabledSources.length),
-          total: enabledSources.length,
-        })
-      );
+  // Debounce 450ms
+  useEffect(() => {
+    const id = setTimeout(() => {
+      if (searchKey.trim()) void handleSearch(searchKey);
+    }, 450);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchKey]);
+
+  const sortedResults: SearchBook[] = (() => {
+    if (state.kind === 'streaming' || state.kind === 'stalled' || state.kind === 'done') {
+      return [...state.results].sort((a, b) => {
+        const sa = (a as SearchBook & { _score?: ScoreBreakdown })._score ?? ZERO_SCORE;
+        const sb = (b as SearchBook & { _score?: ScoreBreakdown })._score ?? ZERO_SCORE;
+        return compareScore(sa, sb);
+      });
     }
+    return [];
+  })();
 
-    setSearchResults(allResults);
-    setMessage(
-      t('home.searchResults', { count: allResults.length, sourceCount: enabledSources.length })
-    );
-    setLoading(false);
-    await saveSearchKeyword(searchKey.trim());
-    // Persist search state for page navigation
-    sessionStorage.setItem('searchKey', searchKey.trim());
-    sessionStorage.setItem('searchResults', JSON.stringify(allResults));
-  }
-
-  async function openBook(book: SearchBook) {
-    const source = sources.find((s) => s.book_source_url === book.origin);
-    if (!source) {
-      setMessage(t('explore.sourceNotFound'));
-      return;
+  const sourceStatusList: SourceStatus[] = (() => {
+    if (state.kind === 'streaming' || state.kind === 'stalled' || state.kind === 'done') {
+      return Object.values(state.statuses);
     }
+    return [];
+  })();
 
-    navigate(`/book/${encodeURIComponent(book.book_url)}`, {
-      state: {
-        preview: true,
-        source,
-        searchBook: book,
-      },
-    });
-  }
+  const failureList: SearchFailure[] = (() => {
+    if (state.kind === 'streaming' || state.kind === 'stalled' || state.kind === 'done') {
+      return state.failures;
+    }
+    return [];
+  })();
 
-  const inputStyle: React.CSSProperties = {
-    padding: '10px 14px',
-    borderRadius: 8,
-    border: '1px solid #e0e0e0',
-    fontSize: 14,
-    outline: 'none',
-    transition: 'border-color 0.2s',
-    fontFamily: 'inherit',
-  };
-
-  const btnPrimary: React.CSSProperties = {
-    padding: '10px 18px',
-    borderRadius: 8,
-    border: 'none',
-    background: '#1976d2',
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-    transition: 'background 0.2s',
-  };
-
-  const btnSecondary: React.CSSProperties = {
-    padding: '8px 16px',
-    borderRadius: 8,
-    border: '1px solid #e0e0e0',
-    background: '#fff',
-    color: '#555',
-    fontSize: 14,
-    cursor: 'pointer',
-    fontWeight: 500,
-  };
+  const retryOne = useCallback(
+    (_url: SourceKey) => {
+      // v1: just re-run the whole search; per-source retry is in P4 polish
+      void handleSearch(searchKey);
+    },
+    [handleSearch, searchKey]
+  );
 
   return (
     <div>
-      {/* Search Section */}
-      <section
-        style={{
-          background: '#fff',
-          borderRadius: 12,
-          padding: 24,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-          marginBottom: 24,
-        }}
-      >
+      {/* Search Bar */}
+      <section style={sectionStyle(isMobileUi)}>
         <h2 style={{ margin: '0 0 16px', fontSize: 18, fontWeight: 700, color: '#1a1a2e' }}>
           {t('layout.searchPage')}
         </h2>
-        <div style={{ display: 'flex', gap: 10 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: isMobileUi ? 'column' : 'row',
+            gap: 10,
+            alignItems: isMobileUi ? 'stretch' : 'center',
+          }}
+        >
           <input
             type="text"
             value={searchKey}
             onChange={(e) => setSearchKey(e.target.value)}
             placeholder={t('home.enterBookName')}
-            style={{ ...inputStyle, flex: 1 }}
-            onKeyDown={(e) => e.key === 'Enter' && searchBooks()}
+            style={{ ...inputStyle, flex: 1, width: isMobileUi ? '100%' : undefined }}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch(searchKey)}
           />
           <button
-            onClick={searchBooks}
-            disabled={loading}
+            onClick={() => handleSearch(searchKey)}
+            disabled={state.kind === 'streaming' || state.kind === 'stalled'}
             style={{
               ...btnPrimary,
-              opacity: loading ? 0.7 : 1,
-              cursor: loading ? 'not-allowed' : 'pointer',
+              opacity: state.kind === 'streaming' || state.kind === 'stalled' ? 0.7 : 1,
+              ...(isMobileUi ? { width: '100%', minHeight: 44 } : {}),
             }}
           >
-            {loading ? t('common.loading') : t('common.search')}
+            {state.kind === 'streaming' || state.kind === 'stalled'
+              ? t('common.loading')
+              : t('common.search')}
           </button>
         </div>
 
@@ -306,119 +427,37 @@ export default function Home() {
               alignItems: 'center',
             }}
           >
-            <span style={{ fontSize: 13, color: '#888', fontWeight: 500 }}>
-              {t('home.history')}
-            </span>
+            <span style={{ fontSize: 13, color: '#888', fontWeight: 500 }}>{t('home.history')}</span>
             {searchHistory.map((item) => (
               <button
                 key={item.id || item.keyword}
                 onClick={() => {
                   setSearchKey(item.keyword);
-                  searchBooks();
+                  void handleSearch(item.keyword);
                 }}
-                style={{
-                  padding: '4px 12px',
-                  borderRadius: 16,
-                  border: '1px solid #e0e0e0',
-                  background: '#f5f7fa',
-                  cursor: 'pointer',
-                  fontSize: 13,
-                  color: '#555',
-                  fontWeight: 500,
-                }}
+                style={chipStyle}
               >
                 {item.keyword}
               </button>
             ))}
-            <button
-              onClick={clearHistory}
-              style={{
-                padding: '4px 12px',
-                borderRadius: 16,
-                border: '1px solid #ffcdd2',
-                background: '#fff0f0',
-                cursor: 'pointer',
-                fontSize: 13,
-                color: '#f44336',
-                fontWeight: 500,
-              }}
-            >
+            <button onClick={clearHistory} style={chipDangerStyle}>
               {t('home.clearHistory')}
             </button>
           </div>
         )}
       </section>
 
-      {/* Source Status */}
-      <section
-        style={{
-          background: '#fff',
-          borderRadius: 12,
-          padding: '16px 24px',
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-          marginBottom: 24,
-        }}
-      >
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <span style={{ fontSize: 14, color: '#555' }}>
-              {sources.length === 0
-                ? t('home.noSources')
-                : t('home.sourcesCount', { count: sources.length })}
-            </span>
-            {sources.length > 0 && (
-              <>
-                <span
-                  style={{
-                    fontSize: 12,
-                    padding: '2px 8px',
-                    borderRadius: 10,
-                    background: '#e3f2fd',
-                    color: '#1565c0',
-                    fontWeight: 500,
-                  }}
-                >
-                  {t('home.searchingSources', {
-                    count: sources.filter((s) => s.enabled && s.search_url).length,
-                  })}
-                </span>
-                <span
-                  style={{
-                    fontSize: 12,
-                    padding: '2px 8px',
-                    borderRadius: 10,
-                    background: '#f3e5f5',
-                    color: '#7b1fa2',
-                    fontWeight: 500,
-                  }}
-                >
-                  {t('bookSources.hasExplore')}:{' '}
-                  {sources.filter((s) => s.enabled && s.explore_url).length}
-                </span>
-              </>
-            )}
-          </div>
-          <button
-            onClick={() => navigate('/book-sources')}
-            style={{
-              ...btnSecondary,
-              borderColor: '#bbdefb',
-              color: '#1976d2',
-              fontSize: 13,
-              padding: '6px 14px',
-            }}
-          >
-            {t('layout.bookSources')} →
-          </button>
-        </div>
-      </section>
+      {/* Source status strip (only when searching) */}
+      {sourceStatusList.length > 0 && (
+        <SourceStatusStrip statuses={sourceStatusList} onRetry={retryOne} />
+      )}
 
-      {/* Message */}
-      {message && (
+      {/* Error message */}
+      {state.kind === 'error' && (
         <div
           style={{
-            background: message.includes(t('common.error')) ? '#ffebee' : '#e3f2fd',
-            color: message.includes(t('common.error')) ? '#c62828' : '#1565c0',
+            background: '#ffebee',
+            color: '#c62828',
             padding: '10px 16px',
             borderRadius: 8,
             marginBottom: 16,
@@ -426,228 +465,42 @@ export default function Home() {
             fontWeight: 500,
           }}
         >
-          {message}
+          {state.message}
         </div>
       )}
 
-      {/* Search Results */}
-      {searchResults.length > 0 && (
+      {/* Results */}
+      {sortedResults.length > 0 && (
         <section style={{ marginBottom: 24 }}>
-          <h2 style={{ fontSize: 18, fontWeight: 700, color: '#1a1a2e', marginBottom: 16 }}>
-            {t('home.resultsCount', { count: searchResults.length })}
+          <h2
+            style={{ fontSize: 18, fontWeight: 700, color: '#1a1a2e', marginBottom: 16 }}
+          >
+            {t('home.resultsCount', { count: sortedResults.length })}
           </h2>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {searchResults.map((book) => (
-              <div
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {sortedResults.map((book) => (
+              <ResultCard
                 key={book.book_url}
-                onClick={() => openBook(book)}
-                style={{
-                  background: '#fff',
-                  borderRadius: 12,
-                  padding: 16,
-                  display: 'flex',
-                  gap: 16,
-                  cursor: 'pointer',
-                  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-                  transition: 'transform 0.2s, box-shadow 0.2s',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.transform = 'translateY(-2px)';
-                  e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)';
-                }}
-              >
-                {book.cover_url ? (
-                  <img
-                    src={book.cover_url}
-                    alt="cover"
-                    style={{
-                      width: 80,
-                      height: 100,
-                      objectFit: 'cover',
-                      borderRadius: 8,
-                      background: '#f0f0f0',
-                      flexShrink: 0,
-                    }}
-                    onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: 80,
-                      height: 100,
-                      borderRadius: 8,
-                      background: 'linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#1976d2',
-                      fontSize: 13,
-                      fontWeight: 700,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {book.name.slice(0, 2)}
-                  </div>
-                )}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      fontWeight: 700,
-                      fontSize: 16,
-                      color: '#1a1a2e',
-                      marginBottom: 4,
-                    }}
-                  >
-                    {book.name}
-                  </div>
-                  <div style={{ color: '#666', fontSize: 14, marginBottom: 4 }}>
-                    {book.author} {book.kind && `· ${book.kind}`}
-                  </div>
-                  {book.latest_chapter_title && (
-                    <div style={{ color: '#888', fontSize: 13, marginBottom: 4 }}>
-                      {t('home.latest', { chapter: book.latest_chapter_title })}
-                    </div>
-                  )}
-                  {book.intro && (
-                    <div
-                      style={{
-                        color: '#555',
-                        fontSize: 13,
-                        marginBottom: 4,
-                        lineHeight: 1.5,
-                        display: '-webkit-box',
-                        WebkitLineClamp: 2,
-                        WebkitBoxOrient: 'vertical',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      {book.intro}
-                    </div>
-                  )}
-                  <div style={{ color: '#999', fontSize: 12 }}>
-                    {t('home.source', { name: book.origin_name || 'unknown' })}
-                  </div>
-                </div>
-              </div>
+                book={book}
+                isMobileUi={isMobileUi}
+                onClick={() => openBook(book, sources, navigate)}
+              />
             ))}
           </div>
         </section>
       )}
 
-      {/* Rule Subscriptions */}
-      <section
-        style={{
-          background: '#fff',
-          borderRadius: 12,
-          padding: 24,
-          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 16,
-          }}
-        >
-          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700, color: '#1a1a2e' }}>
-            {t('home.sourceSubscriptions')}
-          </h2>
-          <button
-            onClick={checkSubUpdates}
-            disabled={loading || ruleSubs.length === 0}
-            style={{
-              ...btnSecondary,
-              borderColor: '#ffe082',
-              color: '#f9a825',
-              opacity: loading || ruleSubs.length === 0 ? 0.6 : 1,
-              cursor: loading || ruleSubs.length === 0 ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {t('home.checkUpdates')}
-          </button>
-        </div>
+      {/* Failure footer */}
+      {failureList.length > 0 && (
+        <FailureFooter failures={failureList} onRetryAll={() => handleSearch(searchKey)} />
+      )}
 
-        <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
-          <input
-            type="text"
-            placeholder={t('home.subNamePlaceholder')}
-            value={newSubName}
-            onChange={(e) => setNewSubName(e.target.value)}
-            style={{ ...inputStyle, width: 160 }}
-          />
-          <input
-            type="text"
-            placeholder={t('home.subUrlPlaceholder')}
-            value={newSubUrl}
-            onChange={(e) => setNewSubUrl(e.target.value)}
-            style={{ ...inputStyle, flex: 1 }}
-          />
-          <button onClick={addRuleSub} style={btnPrimary}>
-            {t('common.add')}
-          </button>
-        </div>
-
-        {ruleSubs.length === 0 ? (
-          <p style={{ color: '#888', margin: 0 }}>{t('home.noSubscriptions')}</p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {ruleSubs.map((sub) => (
-              <div
-                key={sub.id}
-                style={{
-                  padding: '12px 16px',
-                  borderRadius: 8,
-                  background: '#fafbfc',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                }}
-              >
-                <div>
-                  <div style={{ fontWeight: 600, color: '#1a1a2e', fontSize: 14 }}>
-                    {sub.name || t('home.unnamed')}
-                  </div>
-                  <div
-                    style={{
-                      fontSize: 12,
-                      color: '#888',
-                      marginTop: 2,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      maxWidth: 400,
-                    }}
-                    title={sub.url}
-                  >
-                    {sub.url}
-                  </div>
-                </div>
-                <button
-                  onClick={() => sub.id && deleteRuleSub(sub.id)}
-                  style={{
-                    padding: '4px 10px',
-                    fontSize: 12,
-                    color: '#f44336',
-                    border: '1px solid #ffcdd2',
-                    background: '#fff0f0',
-                    borderRadius: 6,
-                    cursor: 'pointer',
-                    fontWeight: 500,
-                  }}
-                >
-                  {t('common.delete')}
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      {/* Status: idle hint */}
+      {state.kind === 'idle' && sources.length > 0 && (
+        <p style={{ color: '#888', fontSize: 13, marginTop: 24 }}>
+          {t('home.sourcesCount', { count: sources.filter((s) => s.enabled && s.search_url).length })}
+        </p>
+      )}
     </div>
   );
 }
