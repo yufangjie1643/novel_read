@@ -4,7 +4,7 @@ use deadpool_sync::SyncWrapper;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use tauri::Manager as _;
 
 pub mod dao;
@@ -90,7 +90,7 @@ pub fn build_pool(db_path: PathBuf) -> rusqlite::Result<AppPool> {
         .max_size(POOL_MAX_SIZE)
         .runtime(Runtime::Tokio1)
         .build()
-        .map_err(|e| rusqlite::Error::InvalidQuery)?;
+        .map_err(|_e| rusqlite::Error::InvalidQuery)?;
 
     Ok(pool)
 }
@@ -174,11 +174,6 @@ pub fn app_dir() -> &'static PathBuf {
     APP_DIR.get().expect("App directory not initialized")
 }
 
-/// Get the database file path. Panics if the app dir has not been set.
-pub fn db_path() -> PathBuf {
-    app_dir().join("legado.db")
-}
-
 /// If a `legado.db.restore` file is sitting in the app dir, atomically
 /// replace the live DB with it. Run *before* building the pool.
 pub fn check_pending_restore(app_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
@@ -209,79 +204,9 @@ pub fn init_app_state(
 
     let pool = build_pool(app_dir.join("legado.db"))?;
 
-    // Seed defaults synchronously: we already have a sync path through the
-    // pool's manager (we bootstrap a transient connection above); opening
-    // one more to populate defaults keeps the startup path linear and
-    // avoids spinning up a tokio runtime just for this.
     let mut seed_conn = Connection::open(app_dir.join("legado.db"))?;
     bootstrap_first_conn(&mut seed_conn)?;
     seed::seed_defaults(&seed_conn)?;
 
-    // Wire the global Database adapter so legacy `db().as_conn()` calls
-    // (still present in the rest of the codebase during the migration
-    // window) keep working.
-    DB.set(Database {
-        conn: Mutex::new(seed_conn),
-    })
-    .map_err(|_| "Database already initialized")?;
-
     Ok(crate::state::AppState::build(pool))
-}
-
-// ============================================================================
-// Migration shim — kept temporarily so that legacy `db().as_conn()` callers
-// still compile while we progressively convert each command to use
-// `tauri::State<'_, AppState>`. Will be removed once every command goes
-// through `AppState`.
-//
-// Holds a single `Connection` (not a pool). During the migration window this
-// is fine because: (1) we're serializing access via `&'static`, (2) the T3
-// batches replace each `db().as_conn()` call with `state.db.get().await`
-// using the real pool. Once all callers are converted this struct is
-// deleted.
-// ============================================================================
-
-/// Thin handle around a single connection. Only used by the migration shim.
-pub struct Database {
-    conn: Mutex<Connection>,
-}
-
-impl Database {
-    /// Returns a `&Connection` for callers that need a shared borrow.
-    /// The returned reference is **only valid within the current call site**;
-    /// do not hold it across an `await` point — the underlying MutexGuard
-    /// would block other readers and may not be Send.
-    pub fn as_conn(&self) -> &Connection {
-        // We use a temporary MutexGuard just to lock the mutex; we then drop
-        // the guard and leak the &Connection lifetime via a raw pointer.
-        // This is sound as long as the caller does not hold the returned
-        // reference across an await (which would require the same mutex
-        // from another thread and deadlock / Send violation).
-        //
-        // SAFETY: The returned `&Connection` is derived from a live
-        // `Mutex<Connection>` that is stored in a `static OnceLock` and
-        // outlives the static program. The reference is safe to use for
-        // the duration of the call site (the caller is expected to drop it
-        // before crossing an await or returning from a sync function).
-        let guard = self.conn.lock().unwrap();
-        let ptr: *const Connection = &*guard;
-        std::mem::forget(guard);
-        unsafe { &*ptr }
-    }
-
-    /// Returns a `&mut Connection` for code paths that need transactional
-    /// access. Same lifetime constraint as `as_conn`.
-    pub fn as_mut_conn(&self) -> &mut Connection {
-        let mut guard = self.conn.lock().unwrap();
-        let ptr: *mut Connection = &mut *guard;
-        std::mem::forget(guard);
-        unsafe { &mut *ptr }
-    }
-}
-
-static DB: OnceLock<Database> = OnceLock::new();
-
-/// Legacy accessor used by the migration window.
-pub fn db() -> &'static Database {
-    DB.get().expect("Database not initialized")
 }

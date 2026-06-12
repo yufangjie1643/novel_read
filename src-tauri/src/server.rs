@@ -1,5 +1,6 @@
 //! Simple built-in HTTP server for sharing bookshelf over local network
 
+use deadpool::managed::Object;
 use serde_json::json;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,7 +10,7 @@ use tiny_http::{Response, Server};
 
 use crate::db::{
     dao::{BookChapterDao, BookDao},
-    db,
+    AppPool,
 };
 
 static SERVER_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -25,7 +26,7 @@ fn get_local_ip() -> Option<String> {
 
 /// Start the built-in web server on the given port.
 /// If the requested port is in use, automatically tries the next 9 ports.
-pub fn start_server(port: u16) -> Result<String, String> {
+pub fn start_server(pool: AppPool, port: u16) -> Result<String, String> {
     if SERVER_RUNNING.load(Ordering::SeqCst) {
         if let Ok(addr) = SERVER_ADDR.lock() {
             if let Some(a) = addr.as_ref() {
@@ -51,14 +52,29 @@ pub fn start_server(port: u16) -> Result<String, String> {
             *guard = Some(result_url.clone());
         }
 
+        let pool_for_thread = pool.clone();
         thread::spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    eprintln!("[WebServer] failed to build runtime: {}", e);
+                    return;
+                }
+            };
             println!("[WebServer] Listening on http://{}", bind_addr);
             for request in server_clone.incoming_requests() {
                 if !SERVER_RUNNING.load(Ordering::SeqCst) {
                     let _ = request.respond(Response::from_string("Server shutting down"));
                     break;
                 }
-                let response = handle_request(request.url());
+                let pool_for_request = pool_for_thread.clone();
+                let url = request.url().to_string();
+                let response = rt.block_on(async move {
+                    handle_request(&pool_for_request, &url).await
+                });
                 let _ = request.respond(response);
             }
             // Thread ends, server_clone dropped, port released.
@@ -105,9 +121,12 @@ pub fn is_server_running() -> bool {
     SERVER_RUNNING.load(Ordering::SeqCst)
 }
 
-fn handle_request(url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+async fn handle_request(
+    pool: &AppPool,
+    url: &str,
+) -> Response<std::io::Cursor<Vec<u8>>> {
     let result = match url {
-        "/api/books" => get_books_json(),
+        "/api/books" => get_books_json(pool).await,
         "/api/status" => Ok(json!({ "status": "ok", "running": true }).to_string()),
         _ => Ok(json!({ "error": "Not found" }).to_string()),
     };
@@ -126,37 +145,41 @@ fn handle_request(url: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     )
 }
 
-fn get_books_json() -> Result<String, String> {
-    let dao = BookDao::new(db().as_conn());
-    let books = dao.get_all().map_err(|e| e.to_string())?;
+async fn get_books_json(pool: &AppPool) -> Result<String, String> {
+    let obj: Object<_> = pool.get().await.map_err(|e| e.to_string())?;
+    let res: Result<String, rusqlite::Error> = obj
+        .interact(|conn| -> Result<String, rusqlite::Error> {
+            let books = BookDao::new(conn).get_all()?;
+            let mut result = Vec::new();
+            for book in &books {
+                let chapters = BookChapterDao::new(conn)
+                    .get_chapters(&book.book_url)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|c| {
+                        json!({
+                            "index": c.index,
+                            "title": c.title,
+                        })
+                    })
+                    .collect::<Vec<_>>();
 
-    let mut result = Vec::new();
-    for book in books {
-        let chapter_dao = BookChapterDao::new(db().as_conn());
-        let chapters = chapter_dao
-            .get_chapters(&book.book_url)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|c| {
-                json!({
-                    "index": c.index,
-                    "title": c.title,
-                })
-            })
-            .collect::<Vec<_>>();
-
-        result.push(json!({
-            "book_url": book.book_url,
-            "name": book.name,
-            "author": book.author,
-            "cover_url": book.cover_url,
-            "intro": book.intro,
-            "dur_chapter_title": book.dur_chapter_title,
-            "dur_chapter_index": book.dur_chapter_index,
-            "total_chapter_num": book.total_chapter_num,
-            "chapters": chapters,
-        }));
-    }
-
-    serde_json::to_string_pretty(&result).map_err(|e| e.to_string())
+                result.push(json!({
+                    "book_url": book.book_url,
+                    "name": book.name,
+                    "author": book.author,
+                    "cover_url": book.cover_url,
+                    "intro": book.intro,
+                    "dur_chapter_title": book.dur_chapter_title,
+                    "dur_chapter_index": book.dur_chapter_index,
+                    "total_chapter_num": book.total_chapter_num,
+                    "chapters": chapters,
+                }));
+            }
+            serde_json::to_string_pretty(&result)
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        })
+        .await
+        .map_err(|e: deadpool_sync::InteractError| e.to_string())?;
+    res.map_err(|e| e.to_string())
 }

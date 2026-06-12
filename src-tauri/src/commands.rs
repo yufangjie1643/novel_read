@@ -12,7 +12,6 @@ use crate::db::{
         ReplaceRuleDao, RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao,
         SearchKeywordDao, ServerDao, TxtTocRuleDao,
     },
-    db_path,
     models::{
         Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItemsPage,
         ExploreKind, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord,
@@ -1952,43 +1951,39 @@ pub struct ImportResult {
 }
 
 #[tauri::command]
-pub fn import_txt_book(data: Vec<u8>, file_name: String) -> ApiResponse<ImportResult> {
-    match import_txt_bytes(&data, &file_name) {
-        Ok((book, count)) => ApiResponse {
-            success: true,
-            data: Some(ImportResult {
+pub async fn import_txt_book(
+    app_handle: tauri::AppHandle,
+    data: Vec<u8>,
+    file_name: String,
+) -> ApiResponse<ImportResult> {
+    db_op(app_handle, move |conn| {
+        import_txt_bytes(conn, &data, &file_name)
+            .map(|(book, count)| ImportResult {
                 book_url: book.book_url,
                 name: book.name,
                 chapter_count: count,
-            }),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+            })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn import_epub_book(data: Vec<u8>, file_name: String) -> ApiResponse<ImportResult> {
-    match import_epub_content(&data, &file_name) {
-        Ok((book, count)) => ApiResponse {
-            success: true,
-            data: Some(ImportResult {
+pub async fn import_epub_book(
+    app_handle: tauri::AppHandle,
+    data: Vec<u8>,
+    file_name: String,
+) -> ApiResponse<ImportResult> {
+    db_op(app_handle, move |conn| {
+        import_epub_content(conn, &data, &file_name)
+            .map(|(book, count)| ImportResult {
                 book_url: book.book_url,
                 name: book.name,
                 chapter_count: count,
-            }),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+            })
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+    })
+    .await
 }
 
 // ============================================================================
@@ -2823,9 +2818,14 @@ pub fn import_http_tts_from_json(json: String) -> ApiResponse<Vec<HttpTTS>> {
 // ============================================================================
 
 #[tauri::command]
-pub fn start_web_server(port: Option<u16>) -> ApiResponse<String> {
+pub fn start_web_server(
+    app_handle: tauri::AppHandle,
+    port: Option<u16>,
+) -> ApiResponse<String> {
     let port = port.unwrap_or(1122);
-    match server::start_server(port) {
+    let state = app_handle.state::<AppState>();
+    let pool = state.db.clone();
+    match server::start_server(pool, port) {
         Ok(addr) => ApiResponse {
             success: true,
             data: Some(addr),
@@ -2891,7 +2891,7 @@ pub async fn backup_to_webdav(
     remote_name: Option<String>,
 ) -> ApiResponse<String> {
     let client = WebDavClient::new(url, username, password);
-    let local_path = db_path();
+    let local_path = app_dir().join("legado.db");
     let file_name = remote_name.unwrap_or_else(|| "legado_backup.db".to_string());
 
     match client.upload(&file_name, &local_path).await {

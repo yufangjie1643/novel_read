@@ -3,7 +3,6 @@ pub mod txt_parser;
 
 use crate::db::{
     dao::{BookChapterDao, BookDao, ChapterContentDao},
-    db,
     models::{Book, BookChapter},
 };
 
@@ -17,7 +16,11 @@ pub struct ImportedChapter {
 ///
 /// Parses the text into chapters, saves the book and chapters to the database,
 /// and stores each chapter's content in chapter_contents.
-pub fn import_txt_content(content: &str, file_name: &str) -> Result<(Book, usize), ImportError> {
+pub fn import_txt_content(
+    conn: &mut rusqlite::Connection,
+    content: &str,
+    file_name: &str,
+) -> Result<(Book, usize), ImportError> {
     let (book, parsed_chapters) = txt_parser::parse_txt(content, file_name)?;
     let chapters: Vec<ImportedChapter> = parsed_chapters
         .into_iter()
@@ -26,14 +29,18 @@ pub fn import_txt_content(content: &str, file_name: &str) -> Result<(Book, usize
             content: pc.content,
         })
         .collect();
-    save_imported_book(book, chapters)
+    save_imported_book(conn, book, chapters)
 }
 
 /// Import a TXT book from raw bytes
 ///
 /// Detects text encoding, parses chapters, saves the book and chapters to the database,
 /// and stores each chapter's content in chapter_contents.
-pub fn import_txt_bytes(data: &[u8], file_name: &str) -> Result<(Book, usize), ImportError> {
+pub fn import_txt_bytes(
+    conn: &mut rusqlite::Connection,
+    data: &[u8],
+    file_name: &str,
+) -> Result<(Book, usize), ImportError> {
     let (book, parsed_chapters) = txt_parser::parse_txt_bytes(data, file_name)?;
     let chapters: Vec<ImportedChapter> = parsed_chapters
         .into_iter()
@@ -42,14 +49,18 @@ pub fn import_txt_bytes(data: &[u8], file_name: &str) -> Result<(Book, usize), I
             content: pc.content,
         })
         .collect();
-    save_imported_book(book, chapters)
+    save_imported_book(conn, book, chapters)
 }
 
 /// Import an EPUB book from raw bytes
 ///
 /// Parses the EPUB into chapters, saves the book and chapters to the database,
 /// and stores each chapter's content in chapter_contents.
-pub fn import_epub_content(data: &[u8], file_name: &str) -> Result<(Book, usize), ImportError> {
+pub fn import_epub_content(
+    conn: &mut rusqlite::Connection,
+    data: &[u8],
+    file_name: &str,
+) -> Result<(Book, usize), ImportError> {
     let (book, parsed_chapters) = epub_parser::parse_epub(data, file_name)?;
     let chapters: Vec<ImportedChapter> = parsed_chapters
         .into_iter()
@@ -58,42 +69,42 @@ pub fn import_epub_content(data: &[u8], file_name: &str) -> Result<(Book, usize)
             content: pc.content,
         })
         .collect();
-    save_imported_book(book, chapters)
+    save_imported_book(conn, book, chapters)
 }
 
 /// Save an imported book and its chapters to the database
 fn save_imported_book(
+    conn: &mut rusqlite::Connection,
     book: Book,
     parsed_chapters: Vec<ImportedChapter>,
 ) -> Result<(Book, usize), ImportError> {
-    let book_dao = BookDao::new(db().as_conn());
-    let chapter_dao = BookChapterDao::new(db().as_conn());
-    let content_dao = ChapterContentDao::new(db().as_conn());
-
-    // Check if book already exists (outside transaction)
-    if let Ok(Some(_)) = book_dao.get(&book.book_url) {
+    if let Ok(Some(_)) = BookDao::new(&*conn).get(&book.book_url) {
         return Err(ImportError::AlreadyExists(book.name));
     }
 
-    // Wrap all insertions in a transaction for atomicity
-    let conn: &mut rusqlite::Connection = db().as_mut_conn();
     let tx = conn.transaction()?;
 
-    book_dao.insert_conn(&tx, &book)?;
+    BookDao::new(&tx).insert_conn(&tx, &book)?;
 
     if !parsed_chapters.is_empty() {
         let chapters: Vec<_> = parsed_chapters
             .iter()
             .map(|pc| pc.chapter.clone())
             .collect();
-        chapter_dao.insert_many_conn(&tx, &chapters)?;
+        BookChapterDao::new(&tx).insert_many_conn(&tx, &chapters)?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
         for pc in &parsed_chapters {
-            content_dao.save_conn(&tx, &book.book_url, pc.chapter.index, &pc.content, now)?;
+            ChapterContentDao::new(&tx).save_conn(
+                &tx,
+                &book.book_url,
+                pc.chapter.index,
+                &pc.content,
+                now,
+            )?;
         }
     }
 
