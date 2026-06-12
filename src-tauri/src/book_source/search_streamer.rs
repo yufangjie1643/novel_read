@@ -1,8 +1,15 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
+
+use crate::db::models::{BookSource, SearchBook};
+use crate::db::SourceStatsDao;
+use crate::book_source::relevance::{score, ScoreBreakdown};
+use crate::book_source::js_extensions::JsExtState;
+use crate::book_source::web_book::WebBook;
 
 pub const PER_SOURCE_TIMEOUT: Duration = Duration::from_secs(2);
 pub const GLOBAL_TIMEOUT: Duration = Duration::from_millis(3500);
@@ -224,6 +231,181 @@ pub async fn run_stream<S: SearchSink + 'static>(
         total_results: total_results.load(Ordering::Relaxed),
         duration_ms,
     });
+}
+
+/// Real version of the streamer: takes `BookSource` and uses `WebBook::search`
+/// to fetch results. Records per-source health stats into `SourceStatsDao`.
+///
+/// `health_by_url` is a snapshot of `source_stats.health_score` taken at search
+/// start, used to feed the relevance cascade (rule 7).
+pub async fn run_stream_real<S: SearchSink + 'static>(
+    query: String,
+    sources: Vec<BookSource>,
+    sink: Arc<S>,
+    request_id: String,
+    cancel: tokio::sync::watch::Receiver<bool>,
+    stats: Arc<SourceStatsDao>,
+    health_by_url: HashMap<String, f64>,
+) {
+    let started_at = std::time::Instant::now();
+    let total = sources.len();
+    let _ = sink.send(SearchEvent::Started {
+        request_id: request_id.clone(),
+        query: query.clone(),
+        total_sources: total,
+    });
+
+    if total == 0 {
+        let _ = sink.send(SearchEvent::Done {
+            request_id,
+            succeeded: 0,
+            failed: 0,
+            total_results: 0,
+            duration_ms: started_at.elapsed().as_millis() as u64,
+        });
+        return;
+    }
+
+    let succeeded = Arc::new(AtomicUsize::new(0));
+    let failed = Arc::new(AtomicUsize::new(0));
+    let total_results = Arc::new(AtomicUsize::new(0));
+    let send_failures = Arc::new(AtomicUsize::new(0));
+
+    let sem = Arc::new(Semaphore::new(MAX_CONCURRENCY));
+    let mut join_set = tokio::task::JoinSet::new();
+    let q_shared: Arc<str> = Arc::from(query);
+
+    for src in sources {
+        if *cancel.borrow() {
+            break;
+        }
+        let sem = sem.clone();
+        let sink = sink.clone();
+        let q = q_shared.clone();
+        let cancel_rx = cancel.clone();
+        let stats = stats.clone();
+        let health_by_url = health_by_url.clone();
+        let succeeded = succeeded.clone();
+        let failed = failed.clone();
+        let total_results = total_results.clone();
+        let send_failures = send_failures.clone();
+        join_set.spawn(async move {
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            if *cancel_rx.borrow() {
+                return;
+            }
+            let _ = sink.send(SearchEvent::SourceStarted {
+                source_url: src.book_source_url.clone(),
+                source_name: src.book_source_name.clone(),
+            });
+            let url = src.book_source_url.clone();
+            let weight = src.weight;
+            let t0 = std::time::Instant::now();
+            let outcome: Result<Vec<SearchBook>, (String, FailureKind)> =
+                match tokio::time::timeout(
+                    PER_SOURCE_TIMEOUT,
+                    tokio::task::spawn_blocking({
+                        let src = src.clone();
+                        let q = q.clone();
+                        move || {
+                            let web = WebBook::new(JsExtState::global());
+                            web.search(&src, &q, Some(1)).map_err(|e| e.to_string())
+                        }
+                    }),
+                )
+                .await
+                {
+                    Ok(Ok(Ok(books))) => Ok(books),
+                    Ok(Ok(Err(e))) => Err((e, FailureKind::Http)),
+                    Ok(Err(je)) => Err((format!("join: {}", je), FailureKind::Parse)),
+                    Err(_) => Err(("timeout".to_string(), FailureKind::Timeout)),
+                };
+            let latency_ms = t0.elapsed().as_millis() as u64;
+            match outcome {
+                Ok(books) => {
+                    let _ = stats.record_success(&url, latency_ms).await;
+                    let health = health_by_url.get(&url).copied().unwrap_or(1.0);
+                    let mut count = 0usize;
+                    for book in books {
+                        let s = score(
+                            &book.name,
+                            book.author.as_deref(),
+                            book.intro.as_deref(),
+                            &q,
+                            weight,
+                            health,
+                        );
+                        if sink.send(SearchEvent::Result {
+                            source_url: url.clone(),
+                            book,
+                            score: s,
+                        })
+                        .is_ok()
+                        {
+                            count += 1;
+                            total_results.fetch_add(1, Ordering::Relaxed);
+                        } else {
+                            send_failures.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    if sink.send(SearchEvent::SourceFinished {
+                        source_url: url.clone(),
+                        count,
+                        latency_ms,
+                    })
+                    .is_err()
+                    {
+                        send_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                    succeeded.fetch_add(1, Ordering::Relaxed);
+                }
+                Err((e, kind)) => {
+                    match kind {
+                        FailureKind::Timeout => {
+                            let _ = stats.record_timeout(&url, latency_ms).await;
+                        }
+                        _ => {
+                            let _ = stats.record_error(&url, &e, latency_ms).await;
+                        }
+                    }
+                    if sink.send(SearchEvent::SourceFailed {
+                        source_url: url.clone(),
+                        error: e,
+                        latency_ms,
+                        kind,
+                    })
+                    .is_err()
+                    {
+                        send_failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                    failed.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+    }
+
+    let _ = tokio::time::timeout(GLOBAL_TIMEOUT, async {
+        while join_set.join_next().await.is_some() {}
+    })
+    .await;
+
+    let sf = send_failures.load(Ordering::Relaxed);
+    if sf > 0 {
+        eprintln!("search_streamer::run_stream_real: {sf} sink.send() failures");
+    }
+
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    let _ = sink.send(SearchEvent::Done {
+        request_id,
+        succeeded: succeeded.load(Ordering::Relaxed),
+        failed: failed.load(Ordering::Relaxed),
+        total_results: total_results.load(Ordering::Relaxed),
+        duration_ms,
+    });
+    let _ = std::marker::PhantomData::<ScoreBreakdown>; // suppress unused import in mock builds
 }
 
 #[cfg(test)]

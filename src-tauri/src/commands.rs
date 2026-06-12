@@ -1,7 +1,7 @@
 use crate::book_source::{
     analyze_url::AnalyzeUrl,
     js_extensions::JsExtState,
-    search_streamer::{run_stream, SearchEvent, SearchSink},
+    search_streamer::{run_stream_real, SearchEvent, SearchSink},
     source_loader::{load_source_from_url, parse_source_json},
     web_book::WebBook,
 };
@@ -1862,20 +1862,29 @@ pub async fn search_books_stream(
         *guard = Some(cancel_tx);
     }
 
-    let mock_sources: Vec<crate::book_source::search_streamer::MockSource> = sources
+    // Build health map from current stats (snapshot for relevance cascade).
+    let stats_all = state
+        .source_stats
+        .get_all()
+        .await
+        .map_err(|e| e.to_string())?;
+    let health_by_url: std::collections::HashMap<String, f64> = stats_all
         .into_iter()
-        .map(|s| crate::book_source::search_streamer::MockSource {
-            url: s.book_source_url.clone(),
-            name: s.book_source_name.clone(),
-            books: vec![],
-            delay_ms: 0,
-            fail: None,
-        })
+        .map(|s| (s.source_url, s.health_score))
         .collect();
 
     let sink = Arc::new(TauriChannelSink::new(channel));
     let request_id = uuid::Uuid::new_v4().to_string();
-    run_stream(query, mock_sources, sink.clone(), request_id, cancel_rx).await;
+    run_stream_real(
+        query,
+        sources,
+        sink.clone(),
+        request_id,
+        cancel_rx,
+        state.source_stats.clone(),
+        health_by_url,
+    )
+    .await;
     Ok(())
 }
 
