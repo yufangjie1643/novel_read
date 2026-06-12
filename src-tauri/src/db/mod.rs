@@ -11,6 +11,7 @@ pub mod dao;
 pub mod migrations;
 pub mod models;
 pub mod seed;
+pub mod source_stats_dao;
 
 pub use dao::{
     BookChapterDao, BookDao, BookGroupDao, BookSourceDao, BookmarkDao, CacheDao, ChapterContentDao,
@@ -19,6 +20,7 @@ pub use dao::{
     ServerDao, TxtTocRuleDao,
 };
 pub use models::{RssSource, RuleSub};
+pub use source_stats_dao::{compute_health, HealthInputs, SourceStats, SourceStatsDao};
 
 /// Pool size used for the shared `deadpool-sqlite` connection pool.
 /// 8 is comfortable for desktop with the Tauri IPC runtime; tune later if

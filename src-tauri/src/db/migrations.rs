@@ -314,6 +314,25 @@ CREATE TABLE IF NOT EXISTS chapter_contents (
 );
 "#;
 
+pub const CREATE_SOURCE_STATS_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS source_stats (
+    sourceUrl TEXT PRIMARY KEY REFERENCES book_sources(bookSourceUrl) ON DELETE CASCADE,
+    total_queries INTEGER NOT NULL DEFAULT 0,
+    successful_queries INTEGER NOT NULL DEFAULT 0,
+    timed_out_queries INTEGER NOT NULL DEFAULT 0,
+    errored_queries INTEGER NOT NULL DEFAULT 0,
+    total_latency_ms INTEGER NOT NULL DEFAULT 0,
+    last_success_at INTEGER,
+    last_error_at INTEGER,
+    last_error_message TEXT,
+    last_checked_at INTEGER NOT NULL DEFAULT 0,
+    rolling_success_count INTEGER NOT NULL DEFAULT 0,
+    rolling_total_count INTEGER NOT NULL DEFAULT 0,
+    health_score REAL NOT NULL DEFAULT 1.0
+);
+CREATE INDEX IF NOT EXISTS idx_source_stats_health ON source_stats(health_score DESC);
+"#;
+
 /// Execute all migration statements
 pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CREATE_BOOKS_TABLE)?;
@@ -349,6 +368,7 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CREATE_RSS_STARS_TABLE)?;
     conn.execute_batch(CREATE_RSS_READ_RECORDS_TABLE)?;
     conn.execute_batch(CREATE_CHAPTER_CONTENTS_TABLE)?;
+    conn.execute_batch(CREATE_SOURCE_STATS_TABLE)?;
 
     // --- P0 high-frequency secondary indices ---
     // All hot lookup paths used by DAOs (`WHERE bookUrl = ?`, group filters, RSS feeds…).
