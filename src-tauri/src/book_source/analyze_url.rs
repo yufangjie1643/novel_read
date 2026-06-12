@@ -325,14 +325,13 @@ impl AnalyzeUrl {
         params: &RequestParams,
         without_proxy: bool,
     ) -> Result<String, AnalyzeUrlError> {
-        let mut builder =
-            reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(30));
-        if without_proxy {
-            builder = builder.no_proxy();
-        }
-        let client = builder
-            .build()
-            .map_err(|e| AnalyzeUrlError::Client(e.to_string()))?;
+        // Use process-wide pooled clients; pick the no-proxy variant only on
+        // the retry-without-proxy fallback path.
+        let client = if without_proxy {
+            crate::http::blocking_client_no_proxy()
+        } else {
+            crate::http::blocking_client()
+        };
 
         let mut req = match params.method {
             HttpMethod::Get => {

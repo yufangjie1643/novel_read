@@ -4,7 +4,12 @@
 //! Core methods: ajax, getCookie, base64Decode, cacheFile, etc.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// Process-wide shared JsExtState. Lets cookies / cache populated by one IPC
+/// call (e.g. a login or first search) survive into subsequent calls instead
+/// of being thrown away every time `WebBook::new` is invoked.
+static GLOBAL_STATE: OnceLock<Arc<JsExtState>> = OnceLock::new();
 
 /// Shared state for JS extensions
 pub struct JsExtState {
@@ -20,6 +25,16 @@ impl JsExtState {
             cookies: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Returns the process-wide shared instance.
+    ///
+    /// Use this from `#[tauri::command]` handlers so cookies/cache populated
+    /// during one IPC call (e.g. a login or first search) remain available to
+    /// subsequent calls. Tests that need an isolated state should keep using
+    /// [`JsExtState::new`].
+    pub fn global() -> Arc<Self> {
+        GLOBAL_STATE.get_or_init(Self::new).clone()
     }
 
     // ==================== Cookie ====================
@@ -145,13 +160,7 @@ impl JsExtState {
     pub fn ajax(&self, url: &str) -> String {
         let url = url.to_string();
         std::thread::spawn(move || {
-            let client = match reqwest::blocking::Client::builder()
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-            {
-                Ok(c) => c,
-                Err(_) => return String::new(),
-            };
+            let client = crate::http::blocking_client();
             client
                 .get(&url)
                 .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")

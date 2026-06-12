@@ -5,10 +5,7 @@ use serde_json::Value;
 
 /// Download and parse a book source from URL
 pub async fn load_source_from_url(url: &str) -> Result<Vec<BookSource>, SourceLoaderError> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| SourceLoaderError::Client(e.to_string()))?;
+    let client = crate::http::async_client();
 
     let response = client
         .get(url)

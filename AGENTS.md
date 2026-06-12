@@ -30,3 +30,31 @@ Recent history uses concise prefixes such as `docs:` and `feat(desktop):`, plus 
 ## Security & Configuration Tips
 
 Do not commit local databases, generated bundles, or `src-tauri/target/`. Treat Android assets and schemas in `app/` as compatibility references unless a task explicitly updates them. For structural code questions, prefer CodeGraph if initialized; use `rg` for literal text searches.
+
+## Agent Skills Routing
+
+This project ships 24 production-engineering skills under `.agents/skills/` (gitignored; installed locally from [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)). When a task matches one, you MUST invoke it via the `skill` tool and follow its workflow exactly. Do not implement directly when a skill applies.
+
+### Intent → Skill mapping
+
+- New feature / new functionality → `spec-driven-development`, then `planning-and-task-breakdown`, then `incremental-implementation` + `test-driven-development`
+- Vague requirement / "let's brainstorm" → `interview-me` or `idea-refine`
+- Bug / failed test / unexpected behavior → `debugging-and-error-recovery`
+- Refactoring / "make this cleaner" → `code-simplification`
+- Code review / PR review → `code-review-and-quality`
+- API or module boundary design → `api-and-interface-design`
+- UI / component work → `frontend-ui-engineering`
+- Performance concerns → `performance-optimization`
+- Security review / auth / secrets → `security-and-hardening`
+- Git / commit / branch strategy → `git-workflow-and-versioning`
+- Release / deploy / rollout → `shipping-and-launch`
+- Removing old code / migration → `deprecation-and-migration`
+- Telemetry / logging / metrics → `observability-and-instrumentation`
+- Pipeline / CI changes → `ci-cd-and-automation`
+- Architecture decision / docs → `documentation-and-adrs`
+
+### Lifecycle (implicit, no slash commands)
+
+DEFINE → PLAN → BUILD → VERIFY → REVIEW → SHIP. Always finish the earlier phase's required artifact (spec, plan, tests) before moving on. Never skip steps with "I'll add tests later" or "this is too small for a spec".
+
+For the full ruleset and rationale see `.agents/SKILLS_AGENTS.md` (upstream's OpenCode-tuned AGENTS.md). Specialist personas live in `.agents/agents/`, shared checklists in `.agents/references/`.
