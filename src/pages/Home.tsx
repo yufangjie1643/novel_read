@@ -265,9 +265,59 @@ export default function Home() {
   const [searchKey, setSearchKey] = useState('');
   const [searchHistory, setSearchHistory] = useState<SearchKeyword[]>([]);
   const [state, setState] = useState<SearchState>({ kind: 'idle' });
+  const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [, startTransition] = useTransition();
   const currentChannelRef = useRef<Channel<SearchEvent> | null>(null);
   const currentRequestIdRef = useRef<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Keyboard shortcuts: /, ArrowUp/Down, Enter, Escape
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const inField = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+      if (e.key === '/' && !inField) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+      const activeResults =
+        state.kind === 'streaming' || state.kind === 'stalled' || state.kind === 'done'
+          ? state.results
+          : [];
+      if (e.key === 'ArrowDown' && activeResults.length > 0) {
+        e.preventDefault();
+        setSelectedIndex((i) => Math.min(i + 1, activeResults.length - 1));
+      } else if (e.key === 'ArrowUp' && activeResults.length > 0) {
+        e.preventDefault();
+        setSelectedIndex((i) => Math.max(i - 1, 0));
+      } else if (e.key === 'Enter' && !inField && selectedIndex >= 0 && activeResults[selectedIndex]) {
+        e.preventDefault();
+        openBook(activeResults[selectedIndex], sources, navigate);
+      } else if (e.key === 'Escape') {
+        if (state.kind === 'streaming' || state.kind === 'stalled') {
+          // Server-side cancellation via the watch channel happens on next invoke.
+          // Locally, just transition to done with whatever we have so the UI unblocks.
+          if (state.kind === 'streaming' || state.kind === 'stalled') {
+            setState({
+              kind: 'done',
+              query: state.query,
+              results: state.results,
+              statuses: state.statuses,
+              failures: state.failures,
+              totalResults: state.results.length,
+              durationMs: 0,
+              requestId: state.requestId,
+            });
+          }
+        } else {
+          setSearchKey('');
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [state, selectedIndex, sources, navigate]);
 
   useEffect(() => {
     void loadSources();
@@ -418,6 +468,7 @@ export default function Home() {
           }}
         >
           <input
+            ref={searchInputRef}
             type="text"
             value={searchKey}
             onChange={(e) => setSearchKey(e.target.value)}
