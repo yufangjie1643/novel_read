@@ -1,6 +1,9 @@
-use deadpool_sqlite::{Config, Pool, Runtime};
+use deadpool::managed::{Manager as PoolManager, Metrics, RecycleError, RecycleResult};
+use deadpool_sqlite::{Config, Runtime};
+use deadpool_sync::SyncWrapper;
 use rusqlite::Connection;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use tauri::Manager as _;
 
@@ -62,19 +65,17 @@ fn bootstrap_first_conn(conn: &mut Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Pool type alias used throughout the app.
+pub type AppPool = deadpool::managed::Pool<PragmaManager>;
+
 /// Build the shared connection pool pointing at `db_path`.
 ///
-/// Uses deadpool-sqlite's default Manager. PRAGMAs are applied on the
-/// bootstrap connection (which also runs migrations); recycled
-/// connections inside the pool re-apply the sticky `journal_mode = WAL`
-/// automatically (it's DB-file scoped). Connection-scoped PRAGMAs
-/// (`synchronous`, `busy_timeout`, etc.) are NOT re-applied on every
-/// recycle — they live on the first connection for its lifetime. This
-/// is acceptable for the current workload because the pool reuses the
-/// same first connection for the lifetime of the app in steady state.
-/// A future P-cycle can replace the Manager with a custom one that
-/// re-applies the full PRAGMA set.
-pub fn build_pool(db_path: PathBuf) -> rusqlite::Result<Pool> {
+/// Migrations run on a one-shot bootstrap connection so the schema is
+/// guaranteed to exist before any pool check-out. The pool itself uses
+/// [`PragmaManager`] which re-applies the tuned PRAGMA set on every
+/// `create` and `recycle` so recycled connections keep their
+/// connection-scoped settings (synchronous, busy_timeout, etc.).
+pub fn build_pool(db_path: PathBuf) -> rusqlite::Result<AppPool> {
     // Bootstrap: apply PRAGMAs + migrations on a one-shot connection.
     let mut bootstrap_conn = Connection::open(&db_path)?;
     bootstrap_first_conn(&mut bootstrap_conn)?;
@@ -84,15 +85,81 @@ pub fn build_pool(db_path: PathBuf) -> rusqlite::Result<Pool> {
         path: db_path,
         pool: None,
     };
-    let pool = cfg
-        .builder(Runtime::Tokio1)
-        .map_err(|e| rusqlite::Error::InvalidQuery)?
+    let manager = PragmaManager::new(cfg, Runtime::Tokio1);
+    let pool: AppPool = deadpool::managed::Pool::builder(manager)
         .max_size(POOL_MAX_SIZE)
         .runtime(Runtime::Tokio1)
         .build()
         .map_err(|e| rusqlite::Error::InvalidQuery)?;
 
     Ok(pool)
+}
+
+/// Custom deadpool manager that re-applies the tuned PRAGMA set on every
+/// `create` and `recycle`. The default `deadpool_sqlite::Manager` only
+/// re-validates connections on recycle, which means connection-scoped
+/// PRAGMAs (`synchronous`, `busy_timeout`, `temp_store`, `cache_size`,
+/// `mmap_size`, `foreign_keys`) are silently lost the first time a
+/// connection is recycled.
+pub struct PragmaManager {
+    config: Config,
+    recycle_count: AtomicIsize,
+    runtime: Runtime,
+}
+
+impl PragmaManager {
+    pub fn new(config: Config, runtime: Runtime) -> Self {
+        Self {
+            config,
+            recycle_count: AtomicIsize::new(0),
+            runtime,
+        }
+    }
+}
+
+impl PoolManager for PragmaManager {
+    type Type = SyncWrapper<Connection>;
+    type Error = rusqlite::Error;
+
+    async fn create(&self) -> Result<Self::Type, Self::Error> {
+        let path = self.config.path.clone();
+        SyncWrapper::new(self.runtime, move || {
+            let conn = Connection::open(&path)?;
+            conn.execute_batch(PRAGMAS)?;
+            Ok(conn)
+        })
+        .await
+    }
+
+    async fn recycle(
+        &self,
+        conn: &mut Self::Type,
+        _: &Metrics,
+    ) -> RecycleResult<Self::Error> {
+        if conn.is_mutex_poisoned() {
+            return Err(RecycleError::Message(
+                "Mutex is poisoned. Connection is considered unusable.".into(),
+            ));
+        }
+        let n = self.recycle_count.fetch_add(1, Ordering::Relaxed);
+        conn.interact(move |c| -> rusqlite::Result<()> {
+            c.execute_batch(PRAGMAS)?;
+            // Liveness check: the counter increments on every recycle;
+            // if the value we read back doesn't match what we wrote, the
+            // connection has been recycled concurrently under us and we
+            // should not trust its state.
+            let current: isize = c.query_row("SELECT $1", [n], |row| row.get(0))?;
+            if current == n {
+                Ok(())
+            } else {
+                Err(rusqlite::Error::InvalidQuery)
+            }
+        })
+        .await
+        .map_err(|e| RecycleError::message(format!("{e}")))?
+        .map_err(|e| RecycleError::message(format!("{e}")))?;
+        Ok(())
+    }
 }
 
 static APP_DIR: OnceLock<PathBuf> = OnceLock::new();

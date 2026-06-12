@@ -2100,6 +2100,7 @@ dependencies = [
  "chrono",
  "deadpool",
  "deadpool-sqlite",
+ "deadpool-sync",
  "encoding_rs",
  "epub",
  "regex",
