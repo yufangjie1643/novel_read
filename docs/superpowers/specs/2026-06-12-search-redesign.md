@@ -34,7 +34,7 @@
 |---|---|
 | **流式优先** | Tauri `Channel<T>` 推事件, UI 边收边画 |
 | **相关性优先于顺序** | 7-rule cascade, 用户能调权重 |
-| **源是第一类公民** | 每个结果带 `source_id` + `score_breakdown`; 源健康是可见、可监控的 |
+| **源是第一类公民** | 每个结果带 `source_url` + `score_breakdown`; 源健康是可见、可监控的 |
 | **失败可见** | 失败源在 UI 上必须标出来, 不能静默 |
 | **职责分离** | `/search` 只搜; `/sources` 主管书源 + 订阅 |
 | **小步并行** | subagent 切任务, 每个独立可验证, 最后集成测试 |
@@ -88,6 +88,7 @@ pub async fn run_stream(
     channel: Channel<SearchEvent>,
     stats: Arc<SourceStatsDao>,
     request_id: Uuid,
+    mut cancel: tokio::sync::watch::Receiver<bool>,
 ) {
     let started = Instant::now();
     let total = sources.len();
@@ -104,29 +105,36 @@ pub async fn run_stream(
         let rid = request_id;
         tasks.push(tokio::spawn(async move {
             let _permit = sem.acquire().await.unwrap();
-            let _ = channel.send(SearchEvent::SourceStarted { source_id: src.id, source_name: src.display_name.clone() });
+            let _ = channel.send(SearchEvent::SourceStarted { source_url: src.book_source_url.clone(), source_name: src.book_source_name.clone() });
             let t0 = Instant::now();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(2),
-                src.search(&q),
+                tokio::task::spawn_blocking(move || {
+                    let web_book = WebBook::new(JsExtState::global());
+                    web_book.search(&src, &q, Some(1))
+                }),
             ).await;
             let latency_ms = t0.elapsed().as_millis() as u64;
             match outcome {
-                Ok(Ok(books)) => {
-                    stats.record_success(src.id, latency_ms).await;
+                Ok(Ok(Ok(books))) => {
+                    stats.record_success(&src.book_source_url, latency_ms).await;
                     for book in books {
                         let score = relevance::score(&book, &q, &src);
-                        let _ = channel.send(SearchEvent::Result { source_id: src.id, book, score });
+                        let _ = channel.send(SearchEvent::Result { source_url: src.book_source_url.clone(), book, score });
                     }
-                    let _ = channel.send(SearchEvent::SourceFinished { source_id: src.id, count: 0, latency_ms });
+                    let _ = channel.send(SearchEvent::SourceFinished { source_url: src.book_source_url.clone(), count: 0, latency_ms });
                 }
-                Ok(Err(e)) => {
-                    stats.record_error(src.id, &e.to_string(), latency_ms).await;
-                    let _ = channel.send(SearchEvent::SourceFailed { source_id: src.id, error: e.to_string(), latency_ms, kind: FailureKind::Http });
+                Ok(Ok(Err(e))) => {
+                    stats.record_error(&src.book_source_url, &e.to_string(), latency_ms).await;
+                    let _ = channel.send(SearchEvent::SourceFailed { source_url: src.book_source_url.clone(), error: e.to_string(), latency_ms, kind: FailureKind::Http });
                 }
-                Err(_) => {
-                    stats.record_timeout(src.id, latency_ms).await;
-                    let _ = channel.send(SearchEvent::SourceFailed { source_id: src.id, error: "timeout".into(), latency_ms, kind: FailureKind::Timeout });
+                Ok(Err(_join)) => {
+                    stats.record_error(&src.book_source_url, "task join error", latency_ms).await;
+                    let _ = channel.send(SearchEvent::SourceFailed { source_url: src.book_source_url.clone(), error: "join error".into(), latency_ms, kind: FailureKind::Parse });
+                }
+                Err(_timeout) => {
+                    stats.record_timeout(&src.book_source_url, latency_ms).await;
+                    let _ = channel.send(SearchEvent::SourceFailed { source_url: src.book_source_url.clone(), error: "timeout".into(), latency_ms, kind: FailureKind::Timeout });
                 }
             }
         }));
@@ -184,8 +192,10 @@ const handleSearch = useCallback(async (q: string) => {
 
 ```sql
 -- File: src-tauri/src/db/migrations.rs (追加到文件末尾)
+-- 重要: book_sources 表用 bookSourceUrl (TEXT) 作主键, 没有整数 id,
+-- 所以 source_stats 也用 URL 作主键 (与现有 schema 约定一致)
 CREATE TABLE IF NOT EXISTS source_stats (
-  source_id              INTEGER PRIMARY KEY REFERENCES book_sources(id) ON DELETE CASCADE,
+  source_url             TEXT PRIMARY KEY REFERENCES book_sources(bookSourceUrl) ON DELETE CASCADE,
   total_queries          INTEGER NOT NULL DEFAULT 0,
   successful_queries     INTEGER NOT NULL DEFAULT 0,
   timed_out_queries      INTEGER NOT NULL DEFAULT 0,
@@ -198,7 +208,7 @@ CREATE TABLE IF NOT EXISTS source_stats (
   -- Rolling window (last 50 queries; updated by application logic, not SQL trigger)
   rolling_success_count  INTEGER NOT NULL DEFAULT 0,
   rolling_total_count    INTEGER NOT NULL DEFAULT 0,
-  health_score           REAL    NOT NULL DEFAULT 1.0
+  health_score           REAL    NOT NULL DEFAULT 1.0  -- 0.0 ~ 1.0
 );
 
 CREATE INDEX IF NOT EXISTS idx_source_stats_health ON source_stats(health_score DESC);
@@ -285,12 +295,12 @@ pub async fn run_stream(
 | 函数 | 职责 |
 |---|---|
 | `get_all` | 返回所有 source 的 stats (供 `/sources` 页面) |
-| `get_by_id(source_id)` | 单条 |
-| `record_success(source_id, latency_ms)` | `total_queries++, successful_queries++, total_latency_ms += latency_ms, rolling_success_count++, rolling_total_count++, last_success_at = now, last_checked_at = now`, 重算 `health_score` |
-| `record_timeout(source_id, latency_ms)` | 同上, 字段不同 |
-| `record_error(source_id, err_msg, latency_ms)` | 同上, 存 `last_error_message` |
+| `get_by_id(source_url)` | 单条 |
+| `record_success(source_url, latency_ms)` | `total_queries++, successful_queries++, total_latency_ms += latency_ms, rolling_success_count++, rolling_total_count++, last_success_at = now, last_checked_at = now`, 重算 `health_score` |
+| `record_timeout(source_url, latency_ms)` | 同上, 字段不同 |
+| `record_error(source_url, err_msg, latency_ms)` | 同上, 存 `last_error_message` |
 | `compute_health(success_rate, p99_latency, recency)` | 公式见 §2, 返回 `[0.0, 1.0]` |
-| `prune_rolling_window(source_id)` | 当 `rolling_total_count > 50` 时按比例缩 (保守实现: 直接 `/=2`) |
+| `prune_rolling_window(source_url)` | 当 `rolling_total_count > 50` 时按比例缩 (保守实现: 直接 `/=2`) |
 
 **测试**:
 - `record_success_increments`: 字段正确++
@@ -353,10 +363,10 @@ pub struct AppState {
 ```ts
 export type SearchEvent =
   | { event: 'Started'; requestId: string; query: string; totalSources: number }
-  | { event: 'SourceStarted'; sourceId: number; sourceName: string }
-  | { event: 'Result'; sourceId: number; book: SearchBook; score: ScoreBreakdown }
-  | { event: 'SourceFinished'; sourceId: number; count: number; latencyMs: number }
-  | { event: 'SourceFailed'; sourceId: number; error: string; latencyMs: number; kind: 'Timeout' | 'Http' | 'Parse' }
+  | { event: 'SourceStarted'; sourceUrl: string; sourceName: string }
+  | { event: 'Result'; sourceUrl: string; book: SearchBook; score: ScoreBreakdown }
+  | { event: 'SourceFinished'; sourceUrl: string; count: number; latencyMs: number }
+  | { event: 'SourceFailed'; sourceUrl: string; error: string; latencyMs: number; kind: 'Timeout' | 'Http' | 'Parse' }
   | { event: 'Done'; requestId: string; succeeded: number; failed: number; totalResults: number; durationMs: number };
 
 export interface ScoreBreakdown {
@@ -368,6 +378,9 @@ export interface ScoreBreakdown {
   wordPosition: number;
   sourceHealth: number;
 }
+
+// Rust 端用 book_source_url (Text) 作源标识, 不是整数 id
+export type SourceKey = string;
 ```
 
 ---
@@ -400,7 +413,7 @@ export interface ScoreBreakdown {
 | parse_error | `#9c27b0` | 源名 + "解析" | **是** (查看原始响应) |
 | zero_results | `#9e9e9e` | 源名 + "0" | 否 |
 
-Props: `statuses: Map<sourceId, SourceStatus>`, `onRetry(sourceId)`
+Props: `statuses: Map<sourceUrl, SourceStatus>`, `onRetry(sourceUrl)`
 
 ### 6.3 `src/components/search/FailureFooter.tsx` (新)
 
