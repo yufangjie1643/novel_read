@@ -12,7 +12,7 @@ use crate::db::{
         ReplaceRuleDao, RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao,
         SearchKeywordDao, ServerDao, TxtTocRuleDao,
     },
-    db, db_path,
+    db_path,
     models::{
         Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItemsPage,
         ExploreKind, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord,
@@ -393,71 +393,43 @@ pub async fn delete_chapters(
 // ============================================================================
 
 #[tauri::command]
-pub fn get_book_groups() -> ApiResponse<Vec<BookGroup>> {
-    let dao = BookGroupDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(groups) => ApiResponse {
-            success: true,
-            data: Some(groups),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_book_groups(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<BookGroup>> {
+    db_op(app_handle, |conn| BookGroupDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_book_group(group: BookGroup) -> ApiResponse<()> {
-    let dao = BookGroupDao::new(db().as_conn());
-    match dao.insert(&group) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_book_group(
+    app_handle: tauri::AppHandle,
+    group: BookGroup,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookGroupDao::new(conn).insert(&group).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_book_group(group: BookGroup) -> ApiResponse<()> {
-    let dao = BookGroupDao::new(db().as_conn());
-    match dao.update(&group) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_book_group(
+    app_handle: tauri::AppHandle,
+    group: BookGroup,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookGroupDao::new(conn).update(&group).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_book_group(group_id: i64) -> ApiResponse<()> {
-    let dao = BookGroupDao::new(db().as_conn());
-    match dao.delete(group_id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_book_group(
+    app_handle: tauri::AppHandle,
+    group_id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookGroupDao::new(conn).delete(group_id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -465,71 +437,43 @@ pub fn delete_book_group(group_id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_replace_rules() -> ApiResponse<Vec<ReplaceRule>> {
-    let dao = ReplaceRuleDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(rules) => ApiResponse {
-            success: true,
-            data: Some(rules),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_replace_rules(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<ReplaceRule>> {
+    db_op(app_handle, |conn| ReplaceRuleDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_replace_rule(rule: ReplaceRule) -> ApiResponse<i64> {
-    let dao = ReplaceRuleDao::new(db().as_conn());
-    match dao.insert(&rule) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_replace_rule(
+    app_handle: tauri::AppHandle,
+    rule: ReplaceRule,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        ReplaceRuleDao::new(conn).insert(&rule)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_replace_rule(rule: ReplaceRule) -> ApiResponse<()> {
-    let dao = ReplaceRuleDao::new(db().as_conn());
-    match dao.update(&rule) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_replace_rule(
+    app_handle: tauri::AppHandle,
+    rule: ReplaceRule,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        ReplaceRuleDao::new(conn).update(&rule).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_replace_rule(id: i64) -> ApiResponse<()> {
-    let dao = ReplaceRuleDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_replace_rule(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        ReplaceRuleDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -537,54 +481,38 @@ pub fn delete_replace_rule(id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn add_search_keyword(keyword: String) -> ApiResponse<()> {
-    let dao = SearchKeywordDao::new(db().as_conn());
-    match dao.insert_or_update(&keyword) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_search_keyword(
+    app_handle: tauri::AppHandle,
+    keyword: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        SearchKeywordDao::new(conn)
+            .insert_or_update(&keyword)
+            .map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_search_keywords(limit: Option<i64>) -> ApiResponse<Vec<SearchKeyword>> {
-    let dao = SearchKeywordDao::new(db().as_conn());
-    match dao.get_recent(limit.unwrap_or(20)) {
-        Ok(keywords) => ApiResponse {
-            success: true,
-            data: Some(keywords),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_search_keywords(
+    app_handle: tauri::AppHandle,
+    limit: Option<i64>,
+) -> ApiResponse<Vec<SearchKeyword>> {
+    let n = limit.unwrap_or(20);
+    db_op(app_handle, move |conn| {
+        SearchKeywordDao::new(conn).get_recent(n)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn clear_search_keywords() -> ApiResponse<()> {
-    let dao = SearchKeywordDao::new(db().as_conn());
-    match dao.clear() {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn clear_search_keywords(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<()> {
+    db_op(app_handle, |conn| {
+        SearchKeywordDao::new(conn).clear().map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -592,54 +520,36 @@ pub fn clear_search_keywords() -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn set_cookie(url: String, cookie: String) -> ApiResponse<()> {
-    let dao = CookieDao::new(db().as_conn());
-    match dao.insert_or_update(&url, &cookie) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn set_cookie(
+    app_handle: tauri::AppHandle,
+    url: String, cookie: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        CookieDao::new(conn).insert_or_update(&url, &cookie).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_cookie(url: String) -> ApiResponse<Option<String>> {
-    let dao = CookieDao::new(db().as_conn());
-    match dao.get(&url) {
-        Ok(cookie) => ApiResponse {
-            success: true,
-            data: Some(cookie),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_cookie(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> ApiResponse<Option<String>> {
+    db_op(app_handle, move |conn| {
+        CookieDao::new(conn).get(&url)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_cookie(url: String) -> ApiResponse<()> {
-    let dao = CookieDao::new(db().as_conn());
-    match dao.delete(&url) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_cookie(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        CookieDao::new(conn).delete(&url).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -647,54 +557,37 @@ pub fn delete_cookie(url: String) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn set_cache(key: String, value: String, deadline: Option<i64>) -> ApiResponse<()> {
-    let dao = CacheDao::new(db().as_conn());
-    match dao.put(&key, &value, deadline.unwrap_or(0)) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn set_cache(
+    app_handle: tauri::AppHandle,
+    key: String, value: String, deadline: Option<i64>,
+) -> ApiResponse<()> {
+    let d = deadline.unwrap_or(0);
+    db_op(app_handle, move |conn| {
+        CacheDao::new(conn).put(&key, &value, d).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_cache(key: String) -> ApiResponse<Option<String>> {
-    let dao = CacheDao::new(db().as_conn());
-    match dao.get(&key) {
-        Ok(value) => ApiResponse {
-            success: true,
-            data: Some(value),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_cache(
+    app_handle: tauri::AppHandle,
+    key: String,
+) -> ApiResponse<Option<String>> {
+    db_op(app_handle, move |conn| {
+        CacheDao::new(conn).get(&key)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_cache(key: String) -> ApiResponse<()> {
-    let dao = CacheDao::new(db().as_conn());
-    match dao.delete(&key) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_cache(
+    app_handle: tauri::AppHandle,
+    key: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        CacheDao::new(conn).delete(&key).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -702,71 +595,47 @@ pub fn delete_cache(key: String) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn add_bookmark(bookmark: Bookmark) -> ApiResponse<i64> {
-    let dao = BookmarkDao::new(db().as_conn());
-    match dao.insert(&bookmark) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_bookmark(
+    app_handle: tauri::AppHandle,
+    bookmark: Bookmark,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        BookmarkDao::new(conn).insert(&bookmark)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_bookmark(bookmark: Bookmark) -> ApiResponse<()> {
-    let dao = BookmarkDao::new(db().as_conn());
-    match dao.update(&bookmark) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_bookmark(
+    app_handle: tauri::AppHandle,
+    bookmark: Bookmark,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookmarkDao::new(conn).update(&bookmark).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_bookmark(id: i64) -> ApiResponse<()> {
-    let dao = BookmarkDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_bookmark(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        BookmarkDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_bookmarks(book_url: String) -> ApiResponse<Vec<Bookmark>> {
-    let dao = BookmarkDao::new(db().as_conn());
-    match dao.get_by_book(&book_url) {
-        Ok(bookmarks) => ApiResponse {
-            success: true,
-            data: Some(bookmarks),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_bookmarks(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+) -> ApiResponse<Vec<Bookmark>> {
+    db_op(app_handle, move |conn| {
+        BookmarkDao::new(conn).get_by_book(&book_url)
+    })
+    .await
 }
 
 // ============================================================================
@@ -774,54 +643,32 @@ pub fn get_bookmarks(book_url: String) -> ApiResponse<Vec<Bookmark>> {
 // ============================================================================
 
 #[tauri::command]
-pub fn add_read_record(record: ReadRecord) -> ApiResponse<()> {
-    let dao = ReadRecordDao::new(db().as_conn());
-    match dao.upsert(&record) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_read_record(
+    app_handle: tauri::AppHandle,
+    record: ReadRecord,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        ReadRecordDao::new(conn).upsert(&record).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_read_records() -> ApiResponse<Vec<ReadRecord>> {
-    let dao = ReadRecordDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(records) => ApiResponse {
-            success: true,
-            data: Some(records),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_read_records(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<ReadRecord>> {
+    db_op(app_handle, |conn| ReadRecordDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn delete_read_record(book_name: String) -> ApiResponse<()> {
-    let dao = ReadRecordDao::new(db().as_conn());
-    match dao.delete(&book_name) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_read_record(
+    app_handle: tauri::AppHandle,
+    book_name: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        ReadRecordDao::new(conn).delete(&book_name).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -829,71 +676,43 @@ pub fn delete_read_record(book_name: String) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_http_tts_list() -> ApiResponse<Vec<HttpTTS>> {
-    let dao = HttpTTSDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(list) => ApiResponse {
-            success: true,
-            data: Some(list),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_http_tts_list(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<HttpTTS>> {
+    db_op(app_handle, |conn| HttpTTSDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_http_tts(tts: HttpTTS) -> ApiResponse<i64> {
-    let dao = HttpTTSDao::new(db().as_conn());
-    match dao.insert(&tts) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_http_tts(
+    app_handle: tauri::AppHandle,
+    tts: HttpTTS,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        HttpTTSDao::new(conn).insert(&tts)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_http_tts(tts: HttpTTS) -> ApiResponse<()> {
-    let dao = HttpTTSDao::new(db().as_conn());
-    match dao.update(&tts) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_http_tts(
+    app_handle: tauri::AppHandle,
+    tts: HttpTTS,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        HttpTTSDao::new(conn).update(&tts).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_http_tts(id: i64) -> ApiResponse<()> {
-    let dao = HttpTTSDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_http_tts(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        HttpTTSDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -901,71 +720,43 @@ pub fn delete_http_tts(id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_rss_sources() -> ApiResponse<Vec<RssSource>> {
-    let dao = RssSourceDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(sources) => ApiResponse {
-            success: true,
-            data: Some(sources),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_rss_sources(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<RssSource>> {
+    db_op(app_handle, |conn| RssSourceDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_rss_source(source: RssSource) -> ApiResponse<()> {
-    let dao = RssSourceDao::new(db().as_conn());
-    match dao.insert(&source) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_rss_source(
+    app_handle: tauri::AppHandle,
+    source: RssSource,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RssSourceDao::new(conn).insert(&source).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_rss_source(source: RssSource) -> ApiResponse<()> {
-    let dao = RssSourceDao::new(db().as_conn());
-    match dao.update(&source) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_rss_source(
+    app_handle: tauri::AppHandle,
+    source: RssSource,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RssSourceDao::new(conn).update(&source).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_rss_source(url: String) -> ApiResponse<()> {
-    let dao = RssSourceDao::new(db().as_conn());
-    match dao.delete(&url) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_rss_source(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RssSourceDao::new(conn).delete(&url).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -973,37 +764,25 @@ pub fn delete_rss_source(url: String) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_rss_articles(origin: String) -> ApiResponse<Vec<RssArticle>> {
-    let dao = RssArticleDao::new(db().as_conn());
-    match dao.get_by_origin(&origin) {
-        Ok(articles) => ApiResponse {
-            success: true,
-            data: Some(articles),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_rss_articles(
+    app_handle: tauri::AppHandle,
+    origin: String,
+) -> ApiResponse<Vec<RssArticle>> {
+    db_op(app_handle, move |conn| {
+        RssArticleDao::new(conn).get_by_origin(&origin)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn add_rss_articles(articles: Vec<RssArticle>) -> ApiResponse<()> {
-    let dao = RssArticleDao::new(db().as_conn());
-    match dao.insert_many(&articles) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_rss_articles(
+    app_handle: tauri::AppHandle,
+    articles: Vec<RssArticle>,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RssArticleDao::new(conn).insert_many(&articles).map(|_| ())
+    })
+    .await
 }
 
 fn apply_custom_headers(
@@ -1588,71 +1367,43 @@ pub async fn fetch_import_links_from_url(url: String) -> ApiResponse<Vec<SourceL
 // ============================================================================
 
 #[tauri::command]
-pub fn get_txt_toc_rules() -> ApiResponse<Vec<TxtTocRule>> {
-    let dao = TxtTocRuleDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(rules) => ApiResponse {
-            success: true,
-            data: Some(rules),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_txt_toc_rules(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<TxtTocRule>> {
+    db_op(app_handle, |conn| TxtTocRuleDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_txt_toc_rule(rule: TxtTocRule) -> ApiResponse<i64> {
-    let dao = TxtTocRuleDao::new(db().as_conn());
-    match dao.insert(&rule) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_txt_toc_rule(
+    app_handle: tauri::AppHandle,
+    rule: TxtTocRule,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        TxtTocRuleDao::new(conn).insert(&rule)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_txt_toc_rule(rule: TxtTocRule) -> ApiResponse<()> {
-    let dao = TxtTocRuleDao::new(db().as_conn());
-    match dao.update(&rule) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_txt_toc_rule(
+    app_handle: tauri::AppHandle,
+    rule: TxtTocRule,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        TxtTocRuleDao::new(conn).update(&rule).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_txt_toc_rule(id: i64) -> ApiResponse<()> {
-    let dao = TxtTocRuleDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_txt_toc_rule(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        TxtTocRuleDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -1660,71 +1411,43 @@ pub fn delete_txt_toc_rule(id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_rule_subs() -> ApiResponse<Vec<RuleSub>> {
-    let dao = RuleSubDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(subs) => ApiResponse {
-            success: true,
-            data: Some(subs),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_rule_subs(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<RuleSub>> {
+    db_op(app_handle, |conn| RuleSubDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_rule_sub(sub: RuleSub) -> ApiResponse<i64> {
-    let dao = RuleSubDao::new(db().as_conn());
-    match dao.insert(&sub) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_rule_sub(
+    app_handle: tauri::AppHandle,
+    sub: RuleSub,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        RuleSubDao::new(conn).insert(&sub)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_rule_sub(sub: RuleSub) -> ApiResponse<()> {
-    let dao = RuleSubDao::new(db().as_conn());
-    match dao.update(&sub) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_rule_sub(
+    app_handle: tauri::AppHandle,
+    sub: RuleSub,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RuleSubDao::new(conn).update(&sub).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_rule_sub(id: i64) -> ApiResponse<()> {
-    let dao = RuleSubDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_rule_sub(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RuleSubDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -1732,71 +1455,43 @@ pub fn delete_rule_sub(id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_dict_rules() -> ApiResponse<Vec<DictRule>> {
-    let dao = DictRuleDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(rules) => ApiResponse {
-            success: true,
-            data: Some(rules),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_dict_rules(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<DictRule>> {
+    db_op(app_handle, |conn| DictRuleDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_dict_rule(rule: DictRule) -> ApiResponse<i64> {
-    let dao = DictRuleDao::new(db().as_conn());
-    match dao.insert(&rule) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_dict_rule(
+    app_handle: tauri::AppHandle,
+    rule: DictRule,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        DictRuleDao::new(conn).insert(&rule)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_dict_rule(rule: DictRule) -> ApiResponse<()> {
-    let dao = DictRuleDao::new(db().as_conn());
-    match dao.update(&rule) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_dict_rule(
+    app_handle: tauri::AppHandle,
+    rule: DictRule,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        DictRuleDao::new(conn).update(&rule).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_dict_rule(id: i64) -> ApiResponse<()> {
-    let dao = DictRuleDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_dict_rule(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        DictRuleDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -1945,71 +1640,43 @@ pub fn delete_app_file(relative_path: String) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_keyboard_assists() -> ApiResponse<Vec<KeyboardAssist>> {
-    let dao = KeyboardAssistDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(assists) => ApiResponse {
-            success: true,
-            data: Some(assists),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_keyboard_assists(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<KeyboardAssist>> {
+    db_op(app_handle, |conn| KeyboardAssistDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_keyboard_assist(assist: KeyboardAssist) -> ApiResponse<i64> {
-    let dao = KeyboardAssistDao::new(db().as_conn());
-    match dao.insert(&assist) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_keyboard_assist(
+    app_handle: tauri::AppHandle,
+    assist: KeyboardAssist,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        KeyboardAssistDao::new(conn).insert(&assist)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_keyboard_assist(assist: KeyboardAssist) -> ApiResponse<()> {
-    let dao = KeyboardAssistDao::new(db().as_conn());
-    match dao.update(&assist) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_keyboard_assist(
+    app_handle: tauri::AppHandle,
+    assist: KeyboardAssist,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        KeyboardAssistDao::new(conn).update(&assist).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_keyboard_assist(id: i64) -> ApiResponse<()> {
-    let dao = KeyboardAssistDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_keyboard_assist(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        KeyboardAssistDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -2017,71 +1684,43 @@ pub fn delete_keyboard_assist(id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_servers() -> ApiResponse<Vec<Server>> {
-    let dao = ServerDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(servers) => ApiResponse {
-            success: true,
-            data: Some(servers),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_servers(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<Server>> {
+    db_op(app_handle, |conn| ServerDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_server(server: Server) -> ApiResponse<i64> {
-    let dao = ServerDao::new(db().as_conn());
-    match dao.insert(&server) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_server(
+    app_handle: tauri::AppHandle,
+    server: Server,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        ServerDao::new(conn).insert(&server)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_server(server: Server) -> ApiResponse<()> {
-    let dao = ServerDao::new(db().as_conn());
-    match dao.update(&server) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn update_server(
+    app_handle: tauri::AppHandle,
+    server: Server,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        ServerDao::new(conn).update(&server).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_server(id: i64) -> ApiResponse<()> {
-    let dao = ServerDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_server(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        ServerDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -2089,54 +1728,32 @@ pub fn delete_server(id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn get_rss_stars() -> ApiResponse<Vec<RssStar>> {
-    let dao = RssStarDao::new(db().as_conn());
-    match dao.get_all() {
-        Ok(stars) => ApiResponse {
-            success: true,
-            data: Some(stars),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_rss_stars(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<RssStar>> {
+    db_op(app_handle, |conn| RssStarDao::new(conn).get_all()).await
 }
 
 #[tauri::command]
-pub fn add_rss_star(star: RssStar) -> ApiResponse<i64> {
-    let dao = RssStarDao::new(db().as_conn());
-    match dao.insert(&star) {
-        Ok(id) => ApiResponse {
-            success: true,
-            data: Some(id),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn add_rss_star(
+    app_handle: tauri::AppHandle,
+    star: RssStar,
+) -> ApiResponse<i64> {
+    db_op(app_handle, move |conn| {
+        RssStarDao::new(conn).insert(&star)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn delete_rss_star(id: i64) -> ApiResponse<()> {
-    let dao = RssStarDao::new(db().as_conn());
-    match dao.delete(id) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn delete_rss_star(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RssStarDao::new(conn).delete(id).map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -2144,54 +1761,36 @@ pub fn delete_rss_star(id: i64) -> ApiResponse<()> {
 // ============================================================================
 
 #[tauri::command]
-pub fn mark_rss_read(record: RssReadRecord) -> ApiResponse<()> {
-    let dao = RssReadRecordDao::new(db().as_conn());
-    match dao.upsert(&record) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn mark_rss_read(
+    app_handle: tauri::AppHandle,
+    record: RssReadRecord,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        RssReadRecordDao::new(conn).upsert(&record).map(|_| ())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn is_rss_read(origin: String, article_id: i32) -> ApiResponse<bool> {
-    let dao = RssReadRecordDao::new(db().as_conn());
-    match dao.is_read(&origin, article_id) {
-        Ok(read) => ApiResponse {
-            success: true,
-            data: Some(read),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn is_rss_read(
+    app_handle: tauri::AppHandle,
+    origin: String, article_id: i32,
+) -> ApiResponse<bool> {
+    db_op(app_handle, move |conn| {
+        RssReadRecordDao::new(conn).is_read(&origin, article_id)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn get_rss_read_article_ids(origin: String) -> ApiResponse<Vec<i32>> {
-    let dao = RssReadRecordDao::new(db().as_conn());
-    match dao.get_read_article_ids(&origin) {
-        Ok(ids) => ApiResponse {
-            success: true,
-            data: Some(ids),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+pub async fn get_rss_read_article_ids(
+    app_handle: tauri::AppHandle,
+    origin: String,
+) -> ApiResponse<Vec<i32>> {
+    db_op(app_handle, move |conn| {
+        RssReadRecordDao::new(conn).get_read_article_ids(&origin)
+    })
+    .await
 }
 
 // ============================================================================
@@ -2397,44 +1996,30 @@ pub fn import_epub_book(data: Vec<u8>, file_name: String) -> ApiResponse<ImportR
 // ============================================================================
 
 #[tauri::command]
-pub fn get_local_chapter_content(
+pub async fn get_local_chapter_content(
+    app_handle: tauri::AppHandle,
     book_url: String,
     chapter_index: i32,
 ) -> ApiResponse<Option<String>> {
-    let dao = ChapterContentDao::new(db().as_conn());
-    match dao.get(&book_url, chapter_index) {
-        Ok(content) => ApiResponse {
-            success: true,
-            data: Some(content),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+    db_op(app_handle, move |conn| {
+        ChapterContentDao::new(conn).get(&book_url, chapter_index)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn save_local_chapter_content(
+pub async fn save_local_chapter_content(
+    app_handle: tauri::AppHandle,
     book_url: String,
     chapter_index: i32,
     content: String,
 ) -> ApiResponse<()> {
-    let dao = ChapterContentDao::new(db().as_conn());
-    match dao.save(&book_url, chapter_index, &content) {
-        Ok(_) => ApiResponse {
-            success: true,
-            data: Some(()),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-    }
+    db_op(app_handle, move |conn| {
+        ChapterContentDao::new(conn)
+            .save(&book_url, chapter_index, &content)
+            .map(|_| ())
+    })
+    .await
 }
 
 // ============================================================================
@@ -2673,7 +2258,21 @@ pub struct UpdateCheckResult {
     pub latest_chapter_title: Option<String>,
 }
 
-fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
+fn fetch_chapter_list_inner(
+    source: BookSource,
+    book: Book,
+) -> Result<Vec<BookChapter>, String> {
+    let web_book = WebBook::new(JsExtState::global());
+    web_book
+        .get_chapter_list(&source, &book)
+        .map_err(|e| format!("Failed to fetch chapters: {}", e))
+}
+
+#[tauri::command]
+pub async fn check_book_update(
+    app_handle: tauri::AppHandle,
+    book: Book,
+) -> ApiResponse<UpdateCheckResult> {
     if book.origin == "local" {
         return ApiResponse {
             success: true,
@@ -2687,10 +2286,17 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
         };
     }
 
-    // Load source
-    let source_dao = BookSourceDao::new(db().as_conn());
-    let source = match source_dao.get(&book.origin) {
-        Ok(Some(s)) => s,
+    let book_for_source = book.clone();
+    let source = match db_op(app_handle.clone(), move |conn| {
+        BookSourceDao::new(conn).get(&book_for_source.origin)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(Some(s)),
+            ..
+        } => s,
         _ => {
             return ApiResponse {
                 success: false,
@@ -2700,33 +2306,49 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
         }
     };
 
-    // Fetch latest chapter list from source
-    let web_book = WebBook::new(JsExtState::global());
-    let latest_chapters = match web_book.get_chapter_list(&source, &book) {
-        Ok(chapters) => chapters,
+    let book_for_network = book.clone();
+    let fetch = tokio::task::spawn_blocking(move || {
+        fetch_chapter_list_inner(source, book_for_network)
+    })
+    .await;
+    let latest_chapters = match fetch {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
+            return ApiResponse {
+                success: false,
+                data: None,
+                error: Some(e),
+            };
+        }
         Err(e) => {
             return ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to fetch chapters: {}", e)),
+                error: Some(format!("Task failed: {}", e)),
             };
         }
     };
 
-    // Load existing chapters from DB
-    let chapter_dao = BookChapterDao::new(db().as_conn());
-    let existing_chapters = match chapter_dao.get_chapters(&book.book_url) {
-        Ok(chapters) => chapters,
-        Err(e) => {
+    let book_url = book.book_url.clone();
+    let existing_chapters = match db_op(app_handle.clone(), move |conn| {
+        BookChapterDao::new(conn).get_chapters(&book_url)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(c),
+            ..
+        } => c,
+        _ => {
             return ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to load existing chapters: {}", e)),
+                error: Some("Failed to load existing chapters".to_string()),
             };
         }
     };
 
-    // Find new chapters (by URL comparison)
     let existing_urls: std::collections::HashSet<&str> =
         existing_chapters.iter().map(|c| c.url.as_str()).collect();
 
@@ -2741,48 +2363,31 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
     let book_url = book.book_url.clone();
 
     if has_update {
-        let conn: &mut rusqlite::Connection = db().as_mut_conn();
-        let tx = match conn.transaction() {
-            Ok(tx) => tx,
-            Err(e) => {
-                return ApiResponse {
-                    success: false,
-                    data: None,
-                    error: Some(format!("Failed to start transaction: {}", e)),
-                };
-            }
-        };
-
-        if let Err(e) = chapter_dao.insert_many_conn(&tx, &new_chapters) {
+        let new_chapters_for_tx = new_chapters.clone();
+        let book_for_tx = book;
+        let latest_chapters_len = latest_chapters.len();
+        let latest_title_for_tx = latest_title.clone();
+        let update_result = db_op(app_handle, move |conn| {
+            let tx = conn.transaction()?;
+            BookChapterDao::new(&tx).insert_many_conn(&tx, &new_chapters_for_tx)?;
+            let mut updated_book = book_for_tx;
+            updated_book.total_chapter_num = latest_chapters_len as i32;
+            updated_book.latest_chapter_title = latest_title_for_tx;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
+            updated_book.last_check_time = now;
+            BookDao::new(&tx).update_conn(&tx, &updated_book)?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await;
+        if !update_result.success {
             return ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to save new chapters: {}", e)),
-            };
-        }
-
-        let book_dao = BookDao::new(db().as_conn());
-        let mut updated_book = book;
-        updated_book.total_chapter_num = latest_chapters.len() as i32;
-        updated_book.latest_chapter_title = latest_title.clone();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as i64;
-        updated_book.last_check_time = now;
-        if let Err(e) = book_dao.update_conn(&tx, &updated_book) {
-            return ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to update book: {}", e)),
-            };
-        }
-
-        if let Err(e) = tx.commit() {
-            return ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to commit transaction: {}", e)),
+                error: update_result.error,
             };
         }
     }
@@ -2799,18 +2404,6 @@ fn check_book_update_inner(book: Book) -> ApiResponse<UpdateCheckResult> {
     }
 }
 
-#[tauri::command]
-pub async fn check_book_update(book: Book) -> ApiResponse<UpdateCheckResult> {
-    match tokio::task::spawn_blocking(move || check_book_update_inner(book)).await {
-        Ok(resp) => resp,
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(format!("Task failed: {}", e)),
-        },
-    }
-}
-
 // ============================================================================
 // Batch Chapter Cache Commands
 // ============================================================================
@@ -2821,11 +2414,43 @@ pub struct CacheResult {
     pub total_chapters: usize,
 }
 
-fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiResponse<CacheResult> {
-    // Load book
-    let book_dao = BookDao::new(db().as_conn());
-    let book = match book_dao.get(&book_url) {
-        Ok(Some(b)) => b,
+fn fetch_chapter_contents_inner(
+    source: BookSource,
+    book: Book,
+    to_cache: Vec<BookChapter>,
+    book_url: String,
+) -> Vec<(String, i32, String)> {
+    let web_book = WebBook::new(JsExtState::global());
+    let mut entries: Vec<(String, i32, String)> = Vec::new();
+    for chapter in &to_cache {
+        match web_book.get_content(&source, &book, chapter) {
+            Ok(content) => {
+                entries.push((book_url.clone(), chapter.index, content));
+            }
+            Err(e) => {
+                println!("Failed to fetch chapter {}: {}", chapter.index, e);
+            }
+        }
+    }
+    entries
+}
+
+#[tauri::command]
+pub async fn batch_cache_chapters(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+    count: Option<i32>,
+) -> ApiResponse<CacheResult> {
+    let book = match db_op(app_handle.clone(), move |conn| {
+        BookDao::new(conn).get(&book_url)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(Some(b)),
+            ..
+        } => b,
         _ => {
             return ApiResponse {
                 success: false,
@@ -2846,10 +2471,17 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
         };
     }
 
-    // Load source
-    let source_dao = BookSourceDao::new(db().as_conn());
-    let source = match source_dao.get(&book.origin) {
-        Ok(Some(s)) => s,
+    let book_for_source = book.clone();
+    let source = match db_op(app_handle.clone(), move |conn| {
+        BookSourceDao::new(conn).get(&book_for_source.origin)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(Some(s)),
+            ..
+        } => s,
         _ => {
             return ApiResponse {
                 success: false,
@@ -2859,32 +2491,55 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
         }
     };
 
-    // Load chapters
-    let chapter_dao = BookChapterDao::new(db().as_conn());
-    let chapters = match chapter_dao.get_chapters(&book_url) {
-        Ok(chapters) => chapters,
-        Err(e) => {
+    let book_url = book.book_url.clone();
+    let chapters = match db_op(app_handle.clone(), move |conn| {
+        BookChapterDao::new(conn).get_chapters(&book_url)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(c),
+            ..
+        } => c,
+        _ => {
             return ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to load chapters: {}", e)),
+                error: Some("Failed to load chapters".to_string()),
             };
         }
     };
 
-    // Check which chapters are already cached
-    let content_dao = ChapterContentDao::new(db().as_conn());
-    let mut uncached_chapters: Vec<&BookChapter> = Vec::new();
+    let book_url_for_check = book.book_url.clone();
+    let mut uncached_indices: Vec<i32> = Vec::new();
     for chapter in &chapters {
-        match content_dao.exists(&book_url, chapter.index) {
-            Ok(true) => continue,
-            _ => uncached_chapters.push(chapter),
+        let book_url_inner = book_url_for_check.clone();
+        let idx = chapter.index;
+        let exists = match db_op(app_handle.clone(), move |conn| {
+            ChapterContentDao::new(conn).exists(&book_url_inner, idx)
+        })
+        .await
+        {
+            ApiResponse {
+                success: true,
+                data: Some(b),
+                ..
+            } => b,
+            _ => false,
+        };
+        if !exists {
+            uncached_indices.push(chapter.index);
         }
     }
 
     let limit = count.unwrap_or(10) as usize;
-    let to_cache: Vec<&BookChapter> = uncached_chapters.into_iter().take(limit).collect();
-    let total_chapters = chapters.len();
+    let to_cache: Vec<BookChapter> = chapters
+        .into_iter()
+        .filter(|c| uncached_indices.contains(&c.index))
+        .take(limit)
+        .collect();
+    let total_chapters = to_cache.len();
 
     if to_cache.is_empty() {
         return ApiResponse {
@@ -2897,28 +2552,46 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
         };
     }
 
-    // Fetch and cache chapters
-    let web_book = WebBook::new(JsExtState::global());
-    let mut entries: Vec<(String, i32, String)> = Vec::new();
-
-    for chapter in to_cache {
-        match web_book.get_content(&source, &book, chapter) {
-            Ok(content) => {
-                entries.push((book_url.clone(), chapter.index, content));
-            }
-            Err(e) => {
-                println!("Failed to fetch chapter {}: {}", chapter.index, e);
-            }
+    let source_clone = source.clone();
+    let book_clone = book.clone();
+    let to_cache_clone = to_cache.clone();
+    let book_url_for_fetch = book.book_url.clone();
+    let entries = match tokio::task::spawn_blocking(move || {
+        fetch_chapter_contents_inner(
+            source_clone,
+            book_clone,
+            to_cache_clone,
+            book_url_for_fetch,
+        )
+    })
+    .await
+    {
+        Ok(e) => e,
+        Err(e) => {
+            return ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Task failed: {}", e)),
+            };
         }
-    }
+    };
 
     let cached_count = if !entries.is_empty() {
-        match content_dao.save_many(&entries) {
-            Ok(count) => count,
-            Err(e) => {
+        match db_op(app_handle, move |conn| {
+            ChapterContentDao::new(conn).save_many(&entries)
+        })
+        .await
+        {
+            ApiResponse {
+                success: true,
+                data: Some(c),
+                ..
+            } => c,
+            ApiResponse { error: Some(e), .. } => {
                 println!("Failed to batch save chapters: {}", e);
                 0
             }
+            _ => 0,
         }
     } else {
         0
@@ -2931,21 +2604,6 @@ fn batch_cache_chapters_inner(book_url: String, count: Option<i32>) -> ApiRespon
             total_chapters,
         }),
         error: None,
-    }
-}
-
-#[tauri::command]
-pub async fn batch_cache_chapters(
-    book_url: String,
-    count: Option<i32>,
-) -> ApiResponse<CacheResult> {
-    match tokio::task::spawn_blocking(move || batch_cache_chapters_inner(book_url, count)).await {
-        Ok(resp) => resp,
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(format!("Task failed: {}", e)),
-        },
     }
 }
 
