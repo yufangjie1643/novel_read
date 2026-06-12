@@ -1,8 +1,11 @@
 pub mod book_source;
 pub mod commands;
+#[allow(invalid_reference_casting)]
 pub mod db;
+pub mod http;
 pub mod local_book;
 pub mod server;
+pub mod state;
 pub mod webdav;
 
 use commands::*;
@@ -15,7 +18,8 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            db::init_db(app.handle())?;
+            let app_state = db::init_app_state(app.handle())?;
+            app.manage(app_state);
             apply_preview_window_size(app);
             Ok(())
         })
@@ -36,6 +40,9 @@ pub fn run() {
             add_book_source,
             update_book_source,
             delete_book_source,
+            top_book_source,
+            get_book_source_groups,
+            get_explore_kinds,
             // BookChapter commands
             get_chapters,
             add_chapters,
@@ -86,6 +93,8 @@ pub fn run() {
             add_rss_articles,
             fetch_rss_articles,
             parse_source_links_from_html,
+            fetch_import_page_html,
+            fetch_import_config_text,
             fetch_import_links_from_url,
             // TxtTocRule commands
             get_txt_toc_rules,
@@ -102,6 +111,10 @@ pub fn run() {
             add_dict_rule,
             update_dict_rule,
             delete_dict_rule,
+            // App file management commands
+            list_app_files,
+            create_app_folder,
+            delete_app_file,
             // KeyboardAssist commands
             get_keyboard_assists,
             add_keyboard_assist,

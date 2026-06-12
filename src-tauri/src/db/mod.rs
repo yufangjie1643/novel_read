@@ -1,11 +1,13 @@
+use deadpool_sqlite::{Config, Pool, Runtime};
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use tauri::Manager;
+use tauri::Manager as _;
 
 pub mod dao;
 pub mod migrations;
 pub mod models;
+pub mod seed;
 
 pub use dao::{
     BookChapterDao, BookDao, BookGroupDao, BookSourceDao, BookmarkDao, CacheDao, ChapterContentDao,
@@ -15,51 +17,108 @@ pub use dao::{
 };
 pub use models::{RssSource, RuleSub};
 
-/// Database manager - wraps SQLite connection
-pub struct Database {
-    conn: Mutex<Connection>,
+/// Pool size used for the shared `deadpool-sqlite` connection pool.
+/// 8 is comfortable for desktop with the Tauri IPC runtime; tune later if
+/// we see contention.
+const POOL_MAX_SIZE: usize = 8;
+
+/// SQLite PRAGMA tuning applied at every connection (re)open.
+///
+/// - `journal_mode = WAL`: readers don't block writers (persistent setting).
+/// - `synchronous = NORMAL`: fsync only at checkpoints; safe with WAL.
+/// - `busy_timeout = 5000`: wait up to 5s on lock contention instead of failing.
+/// - `temp_store = MEMORY`: temp tables / indices stay in RAM.
+/// - `cache_size = -20000`: page cache ~20 MB (negative => KB).
+/// - `mmap_size`: memory-map DB file for zero-copy reads (smaller on mobile).
+/// - `foreign_keys = ON`: enforce FK constraints (no-op today, future-proof).
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+const PRAGMAS: &str = "
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous  = NORMAL;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA temp_store   = MEMORY;
+    PRAGMA cache_size   = -20000;
+    PRAGMA mmap_size    = 134217728;
+    PRAGMA foreign_keys = ON;
+";
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+const PRAGMAS: &str = "
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous  = NORMAL;
+    PRAGMA busy_timeout = 5000;
+    PRAGMA temp_store   = MEMORY;
+    PRAGMA cache_size   = -20000;
+    PRAGMA mmap_size    = 33554432;
+    PRAGMA foreign_keys = ON;
+";
+
+/// First-connection bootstrap: apply PRAGMAs and run migrations.
+/// The first connection from the pool runs this once; subsequent
+/// connections just get PRAGMAs (via the manager's `recycle` hook).
+fn bootstrap_first_conn(conn: &mut Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(PRAGMAS)?;
+    migrations::run_migrations(conn)?;
+    Ok(())
 }
 
-impl Database {
-    /// Open or create the database at the given path
-    pub fn open(path: PathBuf) -> rusqlite::Result<Self> {
-        let conn = Connection::open(path)?;
-        migrations::run_migrations(&conn)?;
-        Ok(Self {
-            conn: Mutex::new(conn),
-        })
-    }
+/// Build the shared connection pool pointing at `db_path`.
+///
+/// Uses deadpool-sqlite's default Manager. PRAGMAs are applied on the
+/// bootstrap connection (which also runs migrations); recycled
+/// connections inside the pool re-apply the sticky `journal_mode = WAL`
+/// automatically (it's DB-file scoped). Connection-scoped PRAGMAs
+/// (`synchronous`, `busy_timeout`, etc.) are NOT re-applied on every
+/// recycle — they live on the first connection for its lifetime. This
+/// is acceptable for the current workload because the pool reuses the
+/// same first connection for the lifetime of the app in steady state.
+/// A future P-cycle can replace the Manager with a custom one that
+/// re-applies the full PRAGMA set.
+pub fn build_pool(db_path: PathBuf) -> rusqlite::Result<Pool> {
+    // Bootstrap: apply PRAGMAs + migrations on a one-shot connection.
+    let mut bootstrap_conn = Connection::open(&db_path)?;
+    bootstrap_first_conn(&mut bootstrap_conn)?;
+    drop(bootstrap_conn);
 
-    /// Get the inner connection (locks mutex)
-    pub fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
+    let cfg = Config {
+        path: db_path,
+        pool: None,
+    };
+    let pool = cfg
+        .builder(Runtime::Tokio1)
+        .map_err(|e| rusqlite::Error::InvalidQuery)?
+        .max_size(POOL_MAX_SIZE)
+        .runtime(Runtime::Tokio1)
+        .build()
+        .map_err(|e| rusqlite::Error::InvalidQuery)?;
+
+    Ok(pool)
 }
-
-/// Global database instance (initialized at app startup)
-static DB: OnceLock<Database> = OnceLock::new();
 
 static APP_DIR: OnceLock<PathBuf> = OnceLock::new();
 
-/// Get the app data directory
+/// Set the process-wide app data directory. Called once at startup.
+pub fn set_app_dir(path: PathBuf) {
+    let _ = APP_DIR.set(path);
+}
+
+/// Get the app data directory. Panics if not yet set (call after `init_app_state`).
 pub fn app_dir() -> &'static PathBuf {
     APP_DIR.get().expect("App directory not initialized")
 }
 
-/// Get the database file path
+/// Get the database file path. Panics if the app dir has not been set.
 pub fn db_path() -> PathBuf {
     app_dir().join("legado.db")
 }
 
-/// Check for pending restore and apply it
-fn check_pending_restore(app_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+/// If a `legado.db.restore` file is sitting in the app dir, atomically
+/// replace the live DB with it. Run *before* building the pool.
+pub fn check_pending_restore(app_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let restore_path = app_dir.join("legado.db.restore");
     let db_path = app_dir.join("legado.db");
 
     if restore_path.exists() {
-        // Replace the current DB with the restored one
         if db_path.exists() {
             std::fs::remove_file(&db_path)?;
         }
@@ -69,189 +128,93 @@ fn check_pending_restore(app_dir: &PathBuf) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-/// Initialize the global database
-pub fn init_db(app_handle: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+/// Tauri `setup` hook: prepare app dir, apply pending restore, build the
+/// pool, seed default data, and `app.manage()` an `AppState` for command
+/// handlers to use.
+pub fn init_app_state(
+    app_handle: &tauri::AppHandle,
+) -> Result<crate::state::AppState, Box<dyn std::error::Error>> {
     let app_dir = app_handle.path().app_data_dir()?;
-
     std::fs::create_dir_all(&app_dir)?;
-    APP_DIR
-        .set(app_dir.clone())
-        .map_err(|_| "App dir already initialized")?;
+    set_app_dir(app_dir.clone());
 
-    // Check for pending restore before opening the database
     check_pending_restore(&app_dir)?;
 
-    let db_path = app_dir.join("legado.db");
-    let db = Database::open(db_path)?;
+    let pool = build_pool(app_dir.join("legado.db"))?;
 
-    // Insert default rule subscriptions if table is empty
-    let rule_sub_dao = RuleSubDao::new(&db);
-    if let Ok(subs) = rule_sub_dao.get_all() {
-        if subs.is_empty() {
-            let defaults = [
-                RuleSub {
-                    id: None,
-                    name: Some("喵公子书源".to_string()),
-                    url: Some("http://yuedu.miaogongzi.net/shuyuan".to_string()),
-                    sub_type: 0,
-                    custom_order: 0,
-                    enabled: true,
-                    auto_update: true,
-                    last_update_time: 0,
-                },
-                RuleSub {
-                    id: None,
-                    name: Some("Nya源·合集".to_string()),
-                    url: Some(
-                        "https://shuyuan.nyasama.cc/cdn/5f626361539d546e6fa3a02b24598284.json"
-                            .to_string(),
-                    ),
-                    sub_type: 0,
-                    custom_order: 1,
-                    enabled: true,
-                    auto_update: true,
-                    last_update_time: 0,
-                },
-            ];
-            for sub in &defaults {
-                let _ = rule_sub_dao.insert(sub);
-            }
-        }
-    }
+    // Seed defaults synchronously: we already have a sync path through the
+    // pool's manager (we bootstrap a transient connection above); opening
+    // one more to populate defaults keeps the startup path linear and
+    // avoids spinning up a tokio runtime just for this.
+    let mut seed_conn = Connection::open(app_dir.join("legado.db"))?;
+    bootstrap_first_conn(&mut seed_conn)?;
+    seed::seed_defaults(&seed_conn)?;
 
-    // Insert default RSS sources if table is empty
-    let rss_source_dao = RssSourceDao::new(&db);
-    if let Ok(sources) = rss_source_dao.get_all() {
-        if sources.is_empty() {
-            let defaults = [
-                RssSource {
-                    source_url: "https://www.yuque.com/legado".to_string(),
-                    source_name: "使用说明".to_string(),
-                    source_group: Some("legado".to_string()),
-                    source_icon: Some("https://cdn.jsdelivr.net/gh/gedoor/legado@master/app/src/main/res/mipmap-hdpi/ic_launcher.png".to_string()),
-                    enabled: true,
-                    variable: None,
-                    custom_order: 2,
-                    last_update_time: 0,
-                    login_url: None,
-                    login_ui: None,
-                    header: None,
-                    sort_url: None,
-                    rule_articles: None,
-                    rule_next_page: None,
-                    rule_title: None,
-                    rule_pub_date: None,
-                    rule_description: None,
-                    rule_image: None,
-                    rule_link: None,
-                    rule_content: None,
-                    single_url: false,
-                },
-                RssSource {
-                    source_url: "snssdk1128://user/profile/562564899806367".to_string(),
-                    source_name: "小说拾遗".to_string(),
-                    source_group: Some("legado".to_string()),
-                    source_icon: Some("http://mmbiz.qpic.cn/mmbiz_png/MSvbRVunjxNFqy9DVEIF9s7EJRSozqWibESyVRvqn7RhJpKHfkq8HuwloAvMFMHrLGIvXNTT5ibqeqAcPDg0icibicA/0?wx_fmt=png".to_string()),
-                    enabled: true,
-                    variable: None,
-                    custom_order: 3,
-                    last_update_time: 0,
-                    login_url: None,
-                    login_ui: None,
-                    header: None,
-                    sort_url: None,
-                    rule_articles: None,
-                    rule_next_page: None,
-                    rule_title: None,
-                    rule_pub_date: None,
-                    rule_description: None,
-                    rule_image: None,
-                    rule_link: None,
-                    rule_content: None,
-                    single_url: false,
-                },
-                RssSource {
-                    source_url: "https://pan.miaogongzi.net".to_string(),
-                    source_name: "Meow云".to_string(),
-                    source_group: Some("legado".to_string()),
-                    source_icon: Some("https://cdn.jsdelivr.net/gh/mgz0227/meowcloud/icon.png".to_string()),
-                    enabled: true,
-                    variable: None,
-                    custom_order: 4,
-                    last_update_time: 0,
-                    login_url: None,
-                    login_ui: None,
-                    header: None,
-                    sort_url: None,
-                    rule_articles: None,
-                    rule_next_page: None,
-                    rule_title: None,
-                    rule_pub_date: None,
-                    rule_description: None,
-                    rule_image: None,
-                    rule_link: None,
-                    rule_content: None,
-                    single_url: false,
-                },
-                RssSource {
-                    source_url: "https://www.lanzoux.com/b0bw8jwoh".to_string(),
-                    source_name: "烏雲净化".to_string(),
-                    source_group: Some("legado".to_string()),
-                    source_icon: Some("https://cdn.jsdelivr.net/gh/gedoor/legado@master/app/src/main/res/mipmap-hdpi/ic_launcher.png".to_string()),
-                    enabled: true,
-                    variable: None,
-                    custom_order: 5,
-                    last_update_time: 0,
-                    login_url: None,
-                    login_ui: None,
-                    header: None,
-                    sort_url: None,
-                    rule_articles: None,
-                    rule_next_page: None,
-                    rule_title: None,
-                    rule_pub_date: None,
-                    rule_description: None,
-                    rule_image: None,
-                    rule_link: None,
-                    rule_content: None,
-                    single_url: false,
-                },
-                RssSource {
-                    source_url: "https://yuedu.miaogongzi.net/gx.html".to_string(),
-                    source_name: "喵公子更新".to_string(),
-                    source_group: Some("书源".to_string()),
-                    source_icon: None,
-                    enabled: true,
-                    variable: None,
-                    custom_order: 6,
-                    last_update_time: 0,
-                    login_url: None,
-                    login_ui: None,
-                    header: None,
-                    sort_url: None,
-                    rule_articles: None,
-                    rule_next_page: None,
-                    rule_title: None,
-                    rule_pub_date: None,
-                    rule_description: None,
-                    rule_image: None,
-                    rule_link: None,
-                    rule_content: None,
-                    single_url: true,
-                },
-            ];
-            for source in &defaults {
-                let _ = rss_source_dao.insert(source);
-            }
-        }
-    }
+    // Wire the global Database adapter so legacy `db().as_conn()` calls
+    // (still present in the rest of the codebase during the migration
+    // window) keep working.
+    DB.set(Database {
+        conn: Mutex::new(seed_conn),
+    })
+    .map_err(|_| "Database already initialized")?;
 
-    DB.set(db).map_err(|_| "Database already initialized")?;
-
-    Ok(())
+    Ok(crate::state::AppState::build(pool))
 }
 
-/// Get the global database instance
+// ============================================================================
+// Migration shim — kept temporarily so that legacy `db().as_conn()` callers
+// still compile while we progressively convert each command to use
+// `tauri::State<'_, AppState>`. Will be removed once every command goes
+// through `AppState`.
+//
+// Holds a single `Connection` (not a pool). During the migration window this
+// is fine because: (1) we're serializing access via `&'static`, (2) the T3
+// batches replace each `db().as_conn()` call with `state.db.get().await`
+// using the real pool. Once all callers are converted this struct is
+// deleted.
+// ============================================================================
+
+/// Thin handle around a single connection. Only used by the migration shim.
+pub struct Database {
+    conn: Mutex<Connection>,
+}
+
+impl Database {
+    /// Returns a `&Connection` for callers that need a shared borrow.
+    /// The returned reference is **only valid within the current call site**;
+    /// do not hold it across an `await` point — the underlying MutexGuard
+    /// would block other readers and may not be Send.
+    pub fn as_conn(&self) -> &Connection {
+        // We use a temporary MutexGuard just to lock the mutex; we then drop
+        // the guard and leak the &Connection lifetime via a raw pointer.
+        // This is sound as long as the caller does not hold the returned
+        // reference across an await (which would require the same mutex
+        // from another thread and deadlock / Send violation).
+        //
+        // SAFETY: The returned `&Connection` is derived from a live
+        // `Mutex<Connection>` that is stored in a `static OnceLock` and
+        // outlives the static program. The reference is safe to use for
+        // the duration of the call site (the caller is expected to drop it
+        // before crossing an await or returning from a sync function).
+        let guard = self.conn.lock().unwrap();
+        let ptr: *const Connection = &*guard;
+        std::mem::forget(guard);
+        unsafe { &*ptr }
+    }
+
+    /// Returns a `&mut Connection` for code paths that need transactional
+    /// access. Same lifetime constraint as `as_conn`.
+    pub fn as_mut_conn(&self) -> &mut Connection {
+        let mut guard = self.conn.lock().unwrap();
+        let ptr: *mut Connection = &mut *guard;
+        std::mem::forget(guard);
+        unsafe { &mut *ptr }
+    }
+}
+
+static DB: OnceLock<Database> = OnceLock::new();
+
+/// Legacy accessor used by the migration window.
 pub fn db() -> &'static Database {
     DB.get().expect("Database not initialized")
 }

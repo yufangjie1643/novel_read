@@ -238,6 +238,7 @@ CREATE TABLE IF NOT EXISTS txt_toc_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
     rule TEXT,
+    example TEXT,
     enabled INTEGER NOT NULL DEFAULT 1,
     "order" INTEGER NOT NULL DEFAULT 0
 );
@@ -261,7 +262,9 @@ CREATE TABLE IF NOT EXISTS dict_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT,
     url TEXT,
-    enabled INTEGER NOT NULL DEFAULT 1
+    showRule TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sortNumber INTEGER NOT NULL DEFAULT 0
 );
 "#;
 
@@ -333,12 +336,37 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     );
     conn.execute_batch(CREATE_RSS_ARTICLES_TABLE)?;
     conn.execute_batch(CREATE_TXT_TOC_RULES_TABLE)?;
+    let _ = conn.execute("ALTER TABLE txt_toc_rules ADD COLUMN example TEXT", []);
     conn.execute_batch(CREATE_RULE_SUBS_TABLE)?;
     conn.execute_batch(CREATE_DICT_RULES_TABLE)?;
+    let _ = conn.execute("ALTER TABLE dict_rules ADD COLUMN showRule TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE dict_rules ADD COLUMN sortNumber INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
     conn.execute_batch(CREATE_KEYBOARD_ASSISTS_TABLE)?;
     conn.execute_batch(CREATE_SERVERS_TABLE)?;
     conn.execute_batch(CREATE_RSS_STARS_TABLE)?;
     conn.execute_batch(CREATE_RSS_READ_RECORDS_TABLE)?;
     conn.execute_batch(CREATE_CHAPTER_CONTENTS_TABLE)?;
+
+    // --- P0 high-frequency secondary indices ---
+    // All hot lookup paths used by DAOs (`WHERE bookUrl = ?`, group filters, RSS feeds…).
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_chapters_book           ON book_chapters(bookUrl);
+        CREATE INDEX IF NOT EXISTS idx_chapters_book_idx       ON book_chapters(bookUrl, \"index\");
+        CREATE INDEX IF NOT EXISTS idx_chapter_contents_book   ON chapter_contents(bookUrl);
+        CREATE INDEX IF NOT EXISTS idx_bookmarks_book          ON bookmarks(bookUrl);
+        CREATE INDEX IF NOT EXISTS idx_read_records_name       ON read_records(bookName);
+        CREATE INDEX IF NOT EXISTS idx_book_sources_enabled    ON book_sources(enabled, customOrder);
+        CREATE INDEX IF NOT EXISTS idx_book_sources_group      ON book_sources(bookSourceGroup);
+        CREATE INDEX IF NOT EXISTS idx_books_group             ON books(\"group\");
+        CREATE INDEX IF NOT EXISTS idx_rss_articles_origin     ON rss_articles(origin);
+        CREATE INDEX IF NOT EXISTS idx_rss_read_records_origin ON rss_read_records(origin);
+        CREATE INDEX IF NOT EXISTS idx_caches_deadline         ON caches(deadline);
+        ",
+    )?;
+
     Ok(())
 }

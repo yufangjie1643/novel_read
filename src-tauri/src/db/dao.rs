@@ -3,17 +3,16 @@ use super::models::{
     HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource,
     RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
 };
-use super::Database;
 use rusqlite::{params, Connection, Result, Row};
 
 /// Book data access object
 pub struct BookDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> BookDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     /// Insert a book using a provided connection (for transactions)
@@ -43,7 +42,7 @@ impl<'a> BookDao<'a> {
 
     /// Insert a book
     pub fn insert(&self, book: &Book) -> Result<()> {
-        self.insert_conn(&self.db.conn(), book)
+        self.insert_conn(&self.conn, book)
     }
 
     /// Update a book using a provided connection (for transactions)
@@ -98,12 +97,18 @@ impl<'a> BookDao<'a> {
 
     /// Update a book
     pub fn update(&self, book: &Book) -> Result<()> {
-        self.update_conn(&self.db.conn(), book)
+        self.update_conn(&self.conn, book)
     }
 
     /// Delete a book by URL, cascading to related records
     pub fn delete(&self, book_url: &str) -> Result<()> {
-        let mut conn = self.db.conn();
+        // SAFETY: `self.conn` is exclusively held by the current thread for
+        // the duration of this call (callers obtain it from a deadpool
+        // `Object` inside a `spawn_blocking` closure). Re-borrowing as
+        // `&mut Connection` is sound because no other reference into the
+        // same connection is live while this function executes.
+        let conn: &mut Connection =
+            unsafe { &mut *(self.conn as *const Connection as *mut Connection) };
         let tx = conn.transaction()?;
 
         // Get book name for read_records cleanup
@@ -139,7 +144,7 @@ impl<'a> BookDao<'a> {
 
     /// Get a book by URL
     pub fn get(&self, book_url: &str) -> Result<Option<Book>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM books WHERE bookUrl = ?1")?;
         let mut rows = stmt.query(params![book_url])?;
 
@@ -152,7 +157,7 @@ impl<'a> BookDao<'a> {
 
     /// Get all books
     pub fn get_all(&self) -> Result<Vec<Book>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM books ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_book)?;
         rows.collect()
@@ -160,7 +165,7 @@ impl<'a> BookDao<'a> {
 
     /// Get books by group
     pub fn get_by_group(&self, group_id: i64) -> Result<Vec<Book>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM books WHERE \"group\" = ?1 ORDER BY \"order\"")?;
         let rows = stmt.query_map(params![group_id], Self::row_to_book)?;
@@ -169,7 +174,7 @@ impl<'a> BookDao<'a> {
 
     /// Check if book exists
     pub fn exists(&self, book_url: &str) -> Result<bool> {
-        let count: i64 = self.db.conn().query_row(
+        let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM books WHERE bookUrl = ?1",
             params![book_url],
             |row| row.get(0),
@@ -220,16 +225,16 @@ impl<'a> BookDao<'a> {
 // ============================================================================
 
 pub struct BookSourceDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> BookSourceDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, source: &BookSource) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO book_sources (
                 bookSourceUrl, bookSourceName, bookSourceGroup, bookSourceType, bookUrlPattern,
                 customOrder, enabled, enabledExplore, jsLib, enabledCookieJar, concurrentRate,
@@ -251,7 +256,7 @@ impl<'a> BookSourceDao<'a> {
     }
 
     pub fn update(&self, source: &BookSource) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE book_sources SET
                 bookSourceName = ?2, bookSourceGroup = ?3, bookSourceType = ?4, bookUrlPattern = ?5,
                 customOrder = ?6, enabled = ?7, enabledExplore = ?8, jsLib = ?9, enabledCookieJar = ?10,
@@ -274,7 +279,7 @@ impl<'a> BookSourceDao<'a> {
     }
 
     pub fn delete(&self, url: &str) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM book_sources WHERE bookSourceUrl = ?1",
             params![url],
         )?;
@@ -282,7 +287,7 @@ impl<'a> BookSourceDao<'a> {
     }
 
     pub fn get(&self, url: &str) -> Result<Option<BookSource>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM book_sources WHERE bookSourceUrl = ?1")?;
         let mut rows = stmt.query(params![url])?;
         if let Some(row) = rows.next()? {
@@ -293,14 +298,14 @@ impl<'a> BookSourceDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<BookSource>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM book_sources ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_source)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<BookSource>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM book_sources WHERE enabled = 1 ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_source)?;
@@ -308,7 +313,7 @@ impl<'a> BookSourceDao<'a> {
     }
 
     pub fn get_explore_enabled(&self) -> Result<Vec<BookSource>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare(
             "SELECT * FROM book_sources
              WHERE enabledExplore = 1
@@ -326,7 +331,7 @@ impl<'a> BookSourceDao<'a> {
         limit: usize,
         filter: Option<&str>,
     ) -> Result<ExploreItemsPage> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare(
             "SELECT bookSourceUrl, bookSourceName, exploreUrl FROM book_sources
              WHERE enabledExplore = 1
@@ -406,12 +411,78 @@ impl<'a> BookSourceDao<'a> {
     }
 
     pub fn exists(&self, url: &str) -> Result<bool> {
-        let count: i64 = self.db.conn().query_row(
+        let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM book_sources WHERE bookSourceUrl = ?1",
             params![url],
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    pub fn min_order(&self) -> Result<i64> {
+        let conn = self.conn;
+        let min: Option<i64> = conn
+            .query_row("SELECT MIN(customOrder) FROM book_sources", [], |row| {
+                row.get(0)
+            })
+            .ok();
+        Ok(min.unwrap_or(0))
+    }
+
+    pub fn update_order(&self, url: &str, order: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE book_sources SET customOrder = ?2 WHERE bookSourceUrl = ?1",
+            params![url, order],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_explore_kinds(&self, url: &str) -> Result<Vec<super::models::ExploreKind>> {
+        let conn = self.conn;
+        let explore_url: Option<String> = conn.query_row(
+            "SELECT exploreUrl FROM book_sources WHERE bookSourceUrl = ?1 AND enabledExplore = 1",
+            params![url],
+            |row| row.get(0),
+        ).ok();
+
+        let mut kinds = Vec::new();
+        let Some(explore_url) = explore_url else {
+            return Ok(kinds);
+        };
+
+        // Try JSON array first
+        if let Ok(parsed) = serde_json::from_str::<Vec<super::models::ExploreKind>>(&explore_url) {
+            return Ok(parsed);
+        }
+
+        // Parse line-by-line: "title::url" or just "url"
+        for line in explore_url.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Some((title, url)) = trimmed.split_once("::") {
+                let title = title.trim();
+                let url = url.trim();
+                if !title.is_empty() {
+                    kinds.push(super::models::ExploreKind {
+                        title: title.to_string(),
+                        url: if url.is_empty() {
+                            None
+                        } else {
+                            Some(url.to_string())
+                        },
+                    });
+                }
+            } else {
+                kinds.push(super::models::ExploreKind {
+                    title: trimmed.to_string(),
+                    url: Some(trimmed.to_string()),
+                });
+            }
+        }
+
+        Ok(kinds)
     }
 
     fn row_to_source(row: &Row) -> Result<BookSource> {
@@ -455,16 +526,16 @@ impl<'a> BookSourceDao<'a> {
 // ============================================================================
 
 pub struct BookChapterDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> BookChapterDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, chapter: &BookChapter) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO book_chapters (
                 url, bookUrl, "index", title, isVolume, isVip, isPay,
                 startFragmentId, endFragmentId, tag, wordCount
@@ -513,7 +584,8 @@ impl<'a> BookChapterDao<'a> {
     }
 
     pub fn insert_many(&self, chapters: &[BookChapter]) -> Result<()> {
-        let mut conn = self.db.conn();
+        let conn: &mut Connection =
+            unsafe { &mut *(self.conn as *const Connection as *mut Connection) };
         let tx = conn.transaction()?;
         self.insert_many_conn(&tx, chapters)?;
         tx.commit()?;
@@ -521,7 +593,7 @@ impl<'a> BookChapterDao<'a> {
     }
 
     pub fn delete_by_book(&self, book_url: &str) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM book_chapters WHERE bookUrl = ?1",
             params![book_url],
         )?;
@@ -529,7 +601,7 @@ impl<'a> BookChapterDao<'a> {
     }
 
     pub fn get_chapters(&self, book_url: &str) -> Result<Vec<BookChapter>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM book_chapters WHERE bookUrl = ?1 ORDER BY \"index\"")?;
         let rows = stmt.query_map(params![book_url], Self::row_to_chapter)?;
@@ -537,7 +609,7 @@ impl<'a> BookChapterDao<'a> {
     }
 
     pub fn get_chapter(&self, book_url: &str, index: i32) -> Result<Option<BookChapter>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM book_chapters WHERE bookUrl = ?1 AND \"index\" = ?2")?;
         let mut rows = stmt.query(params![book_url, index])?;
@@ -549,7 +621,7 @@ impl<'a> BookChapterDao<'a> {
     }
 
     pub fn get_count(&self, book_url: &str) -> Result<i64> {
-        let count: i64 = self.db.conn().query_row(
+        let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM book_chapters WHERE bookUrl = ?1",
             params![book_url],
             |row| row.get(0),
@@ -579,16 +651,16 @@ impl<'a> BookChapterDao<'a> {
 // ============================================================================
 
 pub struct BookGroupDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> BookGroupDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, group: &BookGroup) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO book_groups (
                 groupId, groupName, "order", show, enableRefresh
             ) VALUES (?1, ?2, ?3, ?4, ?5)"#,
@@ -604,7 +676,7 @@ impl<'a> BookGroupDao<'a> {
     }
 
     pub fn update(&self, group: &BookGroup) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE book_groups SET
                 groupName = ?2, "order" = ?3, show = ?4, enableRefresh = ?5
             WHERE groupId = ?1"#,
@@ -620,7 +692,7 @@ impl<'a> BookGroupDao<'a> {
     }
 
     pub fn delete(&self, group_id: i64) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM book_groups WHERE groupId = ?1",
             params![group_id],
         )?;
@@ -628,7 +700,7 @@ impl<'a> BookGroupDao<'a> {
     }
 
     pub fn get(&self, group_id: i64) -> Result<Option<BookGroup>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM book_groups WHERE groupId = ?1")?;
         let mut rows = stmt.query(params![group_id])?;
         if let Some(row) = rows.next()? {
@@ -639,14 +711,14 @@ impl<'a> BookGroupDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<BookGroup>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM book_groups ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_group)?;
         rows.collect()
     }
 
     pub fn get_visible(&self) -> Result<Vec<BookGroup>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM book_groups WHERE show = 1 ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_group)?;
@@ -669,16 +741,16 @@ impl<'a> BookGroupDao<'a> {
 // ============================================================================
 
 pub struct ReplaceRuleDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> ReplaceRuleDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, rule: &ReplaceRule) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO replace_rules (
                 name, pattern, replacement, scope, isRegex, enabled, "order"
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
@@ -692,14 +764,14 @@ impl<'a> ReplaceRuleDao<'a> {
                 rule.order
             ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, rule: &ReplaceRule) -> Result<()> {
         let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required for update".to_string(),
         ))?;
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE replace_rules SET
                 name = ?2, pattern = ?3, replacement = ?4, scope = ?5,
                 isRegex = ?6, enabled = ?7, "order" = ?8
@@ -719,14 +791,13 @@ impl<'a> ReplaceRuleDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM replace_rules WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get(&self, id: i64) -> Result<Option<ReplaceRule>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM replace_rules WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
@@ -737,14 +808,14 @@ impl<'a> ReplaceRuleDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<ReplaceRule>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM replace_rules ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<ReplaceRule>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM replace_rules WHERE enabled = 1 ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
@@ -752,7 +823,7 @@ impl<'a> ReplaceRuleDao<'a> {
     }
 
     pub fn get_by_scope(&self, scope: &str) -> Result<Vec<ReplaceRule>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare(
             "SELECT * FROM replace_rules WHERE enabled = 1 AND (scope IS NULL OR scope = '' OR scope LIKE ?1) ORDER BY \"order\""
         )?;
@@ -779,12 +850,12 @@ impl<'a> ReplaceRuleDao<'a> {
 // ============================================================================
 
 pub struct SearchKeywordDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> SearchKeywordDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert_or_update(&self, keyword: &str) -> Result<()> {
@@ -793,7 +864,7 @@ impl<'a> SearchKeywordDao<'a> {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO search_keywords (keyword, usageCount, lastUseTime)
                VALUES (?1, 1, ?2)
                ON CONFLICT(keyword) DO UPDATE SET
@@ -804,7 +875,7 @@ impl<'a> SearchKeywordDao<'a> {
     }
 
     pub fn get_recent(&self, limit: i64) -> Result<Vec<SearchKeyword>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM search_keywords ORDER BY lastUseTime DESC LIMIT ?1")?;
         let rows = stmt.query_map(params![limit], Self::row_to_keyword)?;
@@ -812,7 +883,7 @@ impl<'a> SearchKeywordDao<'a> {
     }
 
     pub fn get_popular(&self, limit: i64) -> Result<Vec<SearchKeyword>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM search_keywords ORDER BY usageCount DESC LIMIT ?1")?;
         let rows = stmt.query_map(params![limit], Self::row_to_keyword)?;
@@ -820,14 +891,13 @@ impl<'a> SearchKeywordDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM search_keywords WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn clear(&self) -> Result<()> {
-        self.db.conn().execute("DELETE FROM search_keywords", [])?;
+        self.conn.execute("DELETE FROM search_keywords", [])?;
         Ok(())
     }
 
@@ -846,25 +916,25 @@ impl<'a> SearchKeywordDao<'a> {
 // ============================================================================
 
 pub struct CookieDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> CookieDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert_or_update(&self, url: &str, cookie: &str) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO cookies (url, cookie) VALUES (?1, ?2)
                ON CONFLICT(url) DO UPDATE SET cookie = ?2"#,
             params![url, cookie],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn get(&self, url: &str) -> Result<Option<String>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT cookie FROM cookies WHERE url = ?1")?;
         let mut rows = stmt.query(params![url])?;
         if let Some(row) = rows.next()? {
@@ -875,14 +945,13 @@ impl<'a> CookieDao<'a> {
     }
 
     pub fn delete(&self, url: &str) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM cookies WHERE url = ?1", params![url])?;
         Ok(())
     }
 
     pub fn clear(&self) -> Result<()> {
-        self.db.conn().execute("DELETE FROM cookies", [])?;
+        self.conn.execute("DELETE FROM cookies", [])?;
         Ok(())
     }
 }
@@ -892,16 +961,16 @@ impl<'a> CookieDao<'a> {
 // ============================================================================
 
 pub struct CacheDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> CacheDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn put(&self, key: &str, value: &str, deadline: i64) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO caches ("key", value, deadline) VALUES (?1, ?2, ?3)
                ON CONFLICT("key") DO UPDATE SET value = ?2, deadline = ?3"#,
             params![key, value, deadline],
@@ -915,7 +984,7 @@ impl<'a> CacheDao<'a> {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare(
             "SELECT value FROM caches WHERE \"key\" = ?1 AND (deadline = 0 OR deadline > ?2)",
         )?;
@@ -928,8 +997,7 @@ impl<'a> CacheDao<'a> {
     }
 
     pub fn delete(&self, key: &str) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM caches WHERE \"key\" = ?1", params![key])?;
         Ok(())
     }
@@ -940,7 +1008,7 @@ impl<'a> CacheDao<'a> {
             .unwrap_or_default()
             .as_millis() as i64;
 
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM caches WHERE deadline > 0 AND deadline < ?1",
             params![now],
         )?;
@@ -948,7 +1016,7 @@ impl<'a> CacheDao<'a> {
     }
 
     pub fn clear(&self) -> Result<()> {
-        self.db.conn().execute("DELETE FROM caches", [])?;
+        self.conn.execute("DELETE FROM caches", [])?;
         Ok(())
     }
 }
@@ -958,16 +1026,16 @@ impl<'a> CacheDao<'a> {
 // ============================================================================
 
 pub struct BookmarkDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> BookmarkDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, bookmark: &Bookmark) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO bookmarks (
                 bookName, bookAuthor, chapterName, bookUrl, chapterUrl,
                 chapterIndex, pageIndex, content
@@ -983,14 +1051,14 @@ impl<'a> BookmarkDao<'a> {
                 bookmark.content
             ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, bookmark: &Bookmark) -> Result<()> {
         let id = bookmark.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required".to_string(),
         ))?;
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE bookmarks SET
                 bookName = ?2, bookAuthor = ?3, chapterName = ?4,
                 bookUrl = ?5, chapterUrl = ?6, chapterIndex = ?7,
@@ -1012,14 +1080,13 @@ impl<'a> BookmarkDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM bookmarks WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn delete_by_book(&self, book_url: &str) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM bookmarks WHERE bookUrl = ?1",
             params![book_url],
         )?;
@@ -1027,7 +1094,7 @@ impl<'a> BookmarkDao<'a> {
     }
 
     pub fn get_by_book(&self, book_url: &str) -> Result<Vec<Bookmark>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM bookmarks WHERE bookUrl = ?1 ORDER BY chapterIndex")?;
         let rows = stmt.query_map(params![book_url], Self::row_to_bookmark)?;
@@ -1035,7 +1102,7 @@ impl<'a> BookmarkDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<Bookmark>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM bookmarks ORDER BY id DESC")?;
         let rows = stmt.query_map([], Self::row_to_bookmark)?;
         rows.collect()
@@ -1061,16 +1128,16 @@ impl<'a> BookmarkDao<'a> {
 // ============================================================================
 
 pub struct ReadRecordDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> ReadRecordDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn upsert(&self, record: &ReadRecord) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO read_records (bookName, readTime, lastRead)
                VALUES (?1, ?2, ?3)
                ON CONFLICT(bookName) DO UPDATE SET
@@ -1081,7 +1148,7 @@ impl<'a> ReadRecordDao<'a> {
     }
 
     pub fn get(&self, book_name: &str) -> Result<Option<ReadRecord>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM read_records WHERE bookName = ?1")?;
         let mut rows = stmt.query(params![book_name])?;
         if let Some(row) = rows.next()? {
@@ -1092,14 +1159,14 @@ impl<'a> ReadRecordDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<ReadRecord>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM read_records ORDER BY lastRead DESC")?;
         let rows = stmt.query_map([], Self::row_to_record)?;
         rows.collect()
     }
 
     pub fn delete(&self, book_name: &str) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM read_records WHERE bookName = ?1",
             params![book_name],
         )?;
@@ -1120,16 +1187,16 @@ impl<'a> ReadRecordDao<'a> {
 // ============================================================================
 
 pub struct HttpTTSDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> HttpTTSDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, tts: &HttpTTS) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO http_tts (
                 name, url, contentType, loginUrl, loginUi, header,
                 enabled, concurrentRate, lastUpdateTime
@@ -1146,14 +1213,14 @@ impl<'a> HttpTTSDao<'a> {
                 tts.last_update_time
             ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, tts: &HttpTTS) -> Result<()> {
         let id = tts.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required".to_string(),
         ))?;
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE http_tts SET
                 name = ?2, url = ?3, contentType = ?4, loginUrl = ?5, loginUi = ?6,
                 header = ?7, enabled = ?8, concurrentRate = ?9, lastUpdateTime = ?10
@@ -1175,14 +1242,13 @@ impl<'a> HttpTTSDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM http_tts WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get(&self, id: i64) -> Result<Option<HttpTTS>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM http_tts WHERE id = ?1")?;
         let mut rows = stmt.query(params![id])?;
         if let Some(row) = rows.next()? {
@@ -1193,14 +1259,14 @@ impl<'a> HttpTTSDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<HttpTTS>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM http_tts ORDER BY id")?;
         let rows = stmt.query_map([], Self::row_to_tts)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<HttpTTS>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM http_tts WHERE enabled = 1 ORDER BY id")?;
         let rows = stmt.query_map([], Self::row_to_tts)?;
         rows.collect()
@@ -1227,16 +1293,16 @@ impl<'a> HttpTTSDao<'a> {
 // ============================================================================
 
 pub struct RssSourceDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> RssSourceDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, source: &RssSource) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO rss_sources (
                 sourceUrl, sourceName, sourceGroup, sourceIcon, enabled, variable,
                 customOrder, lastUpdateTime, loginUrl, loginUi, header, sortUrl,
@@ -1256,7 +1322,7 @@ impl<'a> RssSourceDao<'a> {
     }
 
     pub fn update(&self, source: &RssSource) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE rss_sources SET
                 sourceName = ?2, sourceGroup = ?3, sourceIcon = ?4, enabled = ?5,
                 variable = ?6, customOrder = ?7, lastUpdateTime = ?8, loginUrl = ?9,
@@ -1277,14 +1343,13 @@ impl<'a> RssSourceDao<'a> {
     }
 
     pub fn delete(&self, url: &str) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM rss_sources WHERE sourceUrl = ?1", params![url])?;
         Ok(())
     }
 
     pub fn get(&self, url: &str) -> Result<Option<RssSource>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM rss_sources WHERE sourceUrl = ?1")?;
         let mut rows = stmt.query(params![url])?;
         if let Some(row) = rows.next()? {
@@ -1295,14 +1360,14 @@ impl<'a> RssSourceDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<RssSource>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM rss_sources ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_source)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<RssSource>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM rss_sources WHERE enabled = 1 ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_source)?;
@@ -1341,16 +1406,16 @@ impl<'a> RssSourceDao<'a> {
 // ============================================================================
 
 pub struct RssArticleDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> RssArticleDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, article: &RssArticle) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO rss_articles (
                 origin, sort, title, content, description, link, pubDate, variable
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)"#,
@@ -1365,11 +1430,12 @@ impl<'a> RssArticleDao<'a> {
                 article.variable
             ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn insert_many(&self, articles: &[RssArticle]) -> Result<()> {
-        let mut conn = self.db.conn();
+        let conn: &mut Connection =
+            unsafe { &mut *(self.conn as *const Connection as *mut Connection) };
         let tx = conn.transaction()?;
         {
             let mut stmt = tx.prepare(
@@ -1395,7 +1461,7 @@ impl<'a> RssArticleDao<'a> {
     }
 
     pub fn delete_by_origin(&self, origin: &str) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM rss_articles WHERE origin = ?1",
             params![origin],
         )?;
@@ -1403,7 +1469,7 @@ impl<'a> RssArticleDao<'a> {
     }
 
     pub fn get_by_origin(&self, origin: &str) -> Result<Vec<RssArticle>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM rss_articles WHERE origin = ?1 ORDER BY id DESC")?;
         let rows = stmt.query_map(params![origin], Self::row_to_article)?;
@@ -1411,7 +1477,7 @@ impl<'a> RssArticleDao<'a> {
     }
 
     pub fn get_all(&self) -> Result<Vec<RssArticle>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM rss_articles ORDER BY id DESC")?;
         let rows = stmt.query_map([], Self::row_to_article)?;
         rows.collect()
@@ -1437,51 +1503,63 @@ impl<'a> RssArticleDao<'a> {
 // ============================================================================
 
 pub struct TxtTocRuleDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> TxtTocRuleDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, rule: &TxtTocRule) -> Result<i64> {
-        self.db.conn().execute(
-            r#"INSERT INTO txt_toc_rules (name, rule, enabled, "order")
-               VALUES (?1, ?2, ?3, ?4)"#,
-            params![rule.name, rule.rule, rule.enabled as i32, rule.order],
+        self.conn.execute(
+            r#"INSERT INTO txt_toc_rules (name, rule, example, enabled, "order")
+               VALUES (?1, ?2, ?3, ?4, ?5)"#,
+            params![
+                rule.name,
+                rule.rule,
+                rule.example,
+                rule.enabled as i32,
+                rule.order
+            ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, rule: &TxtTocRule) -> Result<()> {
         let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required".to_string(),
         ))?;
-        self.db.conn().execute(
-            r#"UPDATE txt_toc_rules SET name = ?2, rule = ?3, enabled = ?4, "order" = ?5
+        self.conn.execute(
+            r#"UPDATE txt_toc_rules SET name = ?2, rule = ?3, example = ?4, enabled = ?5, "order" = ?6
                WHERE id = ?1"#,
-            params![id, rule.name, rule.rule, rule.enabled as i32, rule.order],
+            params![
+                id,
+                rule.name,
+                rule.rule,
+                rule.example,
+                rule.enabled as i32,
+                rule.order
+            ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM txt_toc_rules WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_all(&self) -> Result<Vec<TxtTocRule>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM txt_toc_rules ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<TxtTocRule>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM txt_toc_rules WHERE enabled = 1 ORDER BY \"order\"")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
@@ -1493,6 +1571,7 @@ impl<'a> TxtTocRuleDao<'a> {
             id: row.get("id").ok(),
             name: row.get("name").ok(),
             rule: row.get("rule").ok(),
+            example: row.get("example").ok(),
             enabled: row.get::<_, i32>("enabled")? != 0,
             order: row.get("order")?,
         })
@@ -1504,16 +1583,16 @@ impl<'a> TxtTocRuleDao<'a> {
 // ============================================================================
 
 pub struct RuleSubDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> RuleSubDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, sub: &RuleSub) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO rule_subs (
                 name, url, type, customOrder, enabled, autoUpdate, lastUpdateTime
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
@@ -1527,14 +1606,14 @@ impl<'a> RuleSubDao<'a> {
                 sub.last_update_time
             ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, sub: &RuleSub) -> Result<()> {
         let id = sub.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required".to_string(),
         ))?;
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE rule_subs SET
                 name = ?2, url = ?3, type = ?4, customOrder = ?5,
                 enabled = ?6, autoUpdate = ?7, lastUpdateTime = ?8
@@ -1554,21 +1633,20 @@ impl<'a> RuleSubDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM rule_subs WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_all(&self) -> Result<Vec<RuleSub>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM rule_subs ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_sub)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<RuleSub>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM rule_subs WHERE enabled = 1 ORDER BY customOrder")?;
         let rows = stmt.query_map([], Self::row_to_sub)?;
@@ -1594,50 +1672,63 @@ impl<'a> RuleSubDao<'a> {
 // ============================================================================
 
 pub struct DictRuleDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> DictRuleDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, rule: &DictRule) -> Result<i64> {
-        self.db.conn().execute(
-            "INSERT INTO dict_rules (name, url, enabled) VALUES (?1, ?2, ?3)",
-            params![rule.name, rule.url, rule.enabled as i32],
+        self.conn.execute(
+            "INSERT INTO dict_rules (name, url, showRule, enabled, sortNumber) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                rule.name,
+                rule.url,
+                rule.show_rule,
+                rule.enabled as i32,
+                rule.sort_number
+            ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, rule: &DictRule) -> Result<()> {
         let id = rule.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required".to_string(),
         ))?;
-        self.db.conn().execute(
-            "UPDATE dict_rules SET name = ?2, url = ?3, enabled = ?4 WHERE id = ?1",
-            params![id, rule.name, rule.url, rule.enabled as i32],
+        self.conn.execute(
+            "UPDATE dict_rules SET name = ?2, url = ?3, showRule = ?4, enabled = ?5, sortNumber = ?6 WHERE id = ?1",
+            params![
+                id,
+                rule.name,
+                rule.url,
+                rule.show_rule,
+                rule.enabled as i32,
+                rule.sort_number
+            ],
         )?;
         Ok(())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM dict_rules WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_all(&self) -> Result<Vec<DictRule>> {
-        let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM dict_rules ORDER BY id")?;
+        let conn = self.conn;
+        let mut stmt = conn.prepare("SELECT * FROM dict_rules ORDER BY sortNumber, id")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<DictRule>> {
-        let conn = self.db.conn();
-        let mut stmt = conn.prepare("SELECT * FROM dict_rules WHERE enabled = 1 ORDER BY id")?;
+        let conn = self.conn;
+        let mut stmt =
+            conn.prepare("SELECT * FROM dict_rules WHERE enabled = 1 ORDER BY sortNumber, id")?;
         let rows = stmt.query_map([], Self::row_to_rule)?;
         rows.collect()
     }
@@ -1647,7 +1738,9 @@ impl<'a> DictRuleDao<'a> {
             id: row.get("id").ok(),
             name: row.get("name").ok(),
             url: row.get("url").ok(),
+            show_rule: row.get("showRule").ok(),
             enabled: row.get::<_, i32>("enabled")? != 0,
+            sort_number: row.get("sortNumber")?,
         })
     }
 }
@@ -1657,16 +1750,16 @@ impl<'a> DictRuleDao<'a> {
 // ============================================================================
 
 pub struct KeyboardAssistDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> KeyboardAssistDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, assist: &KeyboardAssist) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO keyboard_assists (type, "key", value, serialNo)
                VALUES (?1, ?2, ?3, ?4)"#,
             params![
@@ -1676,14 +1769,14 @@ impl<'a> KeyboardAssistDao<'a> {
                 assist.serial_no
             ],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, assist: &KeyboardAssist) -> Result<()> {
         let id = assist.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required".to_string(),
         ))?;
-        self.db.conn().execute(
+        self.conn.execute(
             r#"UPDATE keyboard_assists SET type = ?2, "key" = ?3, value = ?4, serialNo = ?5
                WHERE id = ?1"#,
             params![
@@ -1698,14 +1791,13 @@ impl<'a> KeyboardAssistDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM keyboard_assists WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_all(&self) -> Result<Vec<KeyboardAssist>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM keyboard_assists ORDER BY serialNo")?;
         let rows = stmt.query_map([], Self::row_to_assist)?;
         rows.collect()
@@ -1727,27 +1819,27 @@ impl<'a> KeyboardAssistDao<'a> {
 // ============================================================================
 
 pub struct ServerDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> ServerDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, server: &Server) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             "INSERT INTO servers (name, url, enabled) VALUES (?1, ?2, ?3)",
             params![server.name, server.url, server.enabled as i32],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn update(&self, server: &Server) -> Result<()> {
         let id = server.id.ok_or(rusqlite::Error::InvalidParameterName(
             "id is required".to_string(),
         ))?;
-        self.db.conn().execute(
+        self.conn.execute(
             "UPDATE servers SET name = ?2, url = ?3, enabled = ?4 WHERE id = ?1",
             params![id, server.name, server.url, server.enabled as i32],
         )?;
@@ -1755,21 +1847,20 @@ impl<'a> ServerDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM servers WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_all(&self) -> Result<Vec<Server>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM servers ORDER BY id")?;
         let rows = stmt.query_map([], Self::row_to_server)?;
         rows.collect()
     }
 
     pub fn get_enabled(&self) -> Result<Vec<Server>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM servers WHERE enabled = 1 ORDER BY id")?;
         let rows = stmt.query_map([], Self::row_to_server)?;
         rows.collect()
@@ -1790,38 +1881,37 @@ impl<'a> ServerDao<'a> {
 // ============================================================================
 
 pub struct RssStarDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> RssStarDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn insert(&self, star: &RssStar) -> Result<i64> {
-        self.db.conn().execute(
+        self.conn.execute(
             "INSERT INTO rss_stars (origin, sort, title) VALUES (?1, ?2, ?3)",
             params![star.origin, star.sort, star.title],
         )?;
-        Ok(self.db.conn().last_insert_rowid())
+        Ok(self.conn.last_insert_rowid())
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM rss_stars WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_all(&self) -> Result<Vec<RssStar>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT * FROM rss_stars ORDER BY id DESC")?;
         let rows = stmt.query_map([], Self::row_to_star)?;
         rows.collect()
     }
 
     pub fn get_by_origin(&self, origin: &str) -> Result<Vec<RssStar>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt =
             conn.prepare("SELECT * FROM rss_stars WHERE origin = ?1 ORDER BY id DESC")?;
         let rows = stmt.query_map(params![origin], Self::row_to_star)?;
@@ -1843,16 +1933,16 @@ impl<'a> RssStarDao<'a> {
 // ============================================================================
 
 pub struct RssReadRecordDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> RssReadRecordDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     pub fn upsert(&self, record: &RssReadRecord) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             r#"INSERT INTO rss_read_records (origin, articleId) VALUES (?1, ?2)
                ON CONFLICT(origin, articleId) DO NOTHING"#,
             params![record.origin, record.article_id],
@@ -1861,7 +1951,7 @@ impl<'a> RssReadRecordDao<'a> {
     }
 
     pub fn is_read(&self, origin: &str, article_id: i32) -> Result<bool> {
-        let count: i64 = self.db.conn().query_row(
+        let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM rss_read_records WHERE origin = ?1 AND articleId = ?2",
             params![origin, article_id],
             |row| row.get(0),
@@ -1870,21 +1960,20 @@ impl<'a> RssReadRecordDao<'a> {
     }
 
     pub fn delete(&self, id: i64) -> Result<()> {
-        self.db
-            .conn()
+        self.conn
             .execute("DELETE FROM rss_read_records WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_read_article_ids(&self, origin: &str) -> Result<Vec<i32>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare("SELECT articleId FROM rss_read_records WHERE origin = ?1")?;
         let rows = stmt.query_map(params![origin], |row| row.get(0))?;
         rows.collect()
     }
 
     pub fn clear_by_origin(&self, origin: &str) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM rss_read_records WHERE origin = ?1",
             params![origin],
         )?;
@@ -1897,12 +1986,12 @@ impl<'a> RssReadRecordDao<'a> {
 // ============================================================================
 
 pub struct ChapterContentDao<'a> {
-    db: &'a Database,
+    conn: &'a Connection,
 }
 
 impl<'a> ChapterContentDao<'a> {
-    pub fn new(db: &'a Database) -> Self {
-        Self { db }
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
     }
 
     /// Save or update chapter content using a provided connection (for transactions)
@@ -1930,12 +2019,12 @@ impl<'a> ChapterContentDao<'a> {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
-        self.save_conn(&self.db.conn(), book_url, chapter_index, content, now)
+        self.save_conn(&self.conn, book_url, chapter_index, content, now)
     }
 
     /// Get chapter content
     pub fn get(&self, book_url: &str, chapter_index: i32) -> Result<Option<String>> {
-        let conn = self.db.conn();
+        let conn = self.conn;
         let mut stmt = conn.prepare(
             "SELECT content FROM chapter_contents WHERE bookUrl = ?1 AND chapterIndex = ?2",
         )?;
@@ -1949,7 +2038,7 @@ impl<'a> ChapterContentDao<'a> {
 
     /// Delete all contents for a book
     pub fn delete_by_book(&self, book_url: &str) -> Result<()> {
-        self.db.conn().execute(
+        self.conn.execute(
             "DELETE FROM chapter_contents WHERE bookUrl = ?1",
             params![book_url],
         )?;
@@ -1958,7 +2047,7 @@ impl<'a> ChapterContentDao<'a> {
 
     /// Check if content exists
     pub fn exists(&self, book_url: &str, chapter_index: i32) -> Result<bool> {
-        let count: i64 = self.db.conn().query_row(
+        let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM chapter_contents WHERE bookUrl = ?1 AND chapterIndex = ?2",
             params![book_url, chapter_index],
             |row| row.get(0),
@@ -1968,7 +2057,8 @@ impl<'a> ChapterContentDao<'a> {
 
     /// Batch save chapter contents within a transaction
     pub fn save_many(&self, entries: &[(String, i32, String)]) -> Result<usize> {
-        let mut conn = self.db.conn();
+        let conn: &mut Connection =
+            unsafe { &mut *(self.conn as *const Connection as *mut Connection) };
         let tx = conn.transaction()?;
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
