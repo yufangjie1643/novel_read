@@ -34,6 +34,7 @@ pub fn run() {
             migrate_book_source,
             // BookSource commands
             get_book_sources,
+            get_source_stats,
             get_enabled_book_sources,
             get_explore_book_sources,
             get_explore_items,

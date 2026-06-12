@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useDeferredValue } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { ApiResponse, BookSource, SearchBook } from '../types';
 
@@ -8,6 +9,7 @@ const SOURCE_RENDER_INCREMENT = 120;
 
 export default function BookSources() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [sources, setSources] = useState<BookSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -449,6 +451,25 @@ export default function BookSources() {
 
   return (
     <div>
+      <div
+        style={{
+          background: '#fff3e0',
+          border: '1px solid #ffe0b2',
+          borderRadius: 8,
+          padding: 12,
+          marginBottom: 16,
+          fontSize: 13,
+          color: '#bf360c',
+        }}
+      >
+        ⚠ {t('home.deprecationBanner', 'This page has been moved to /sources and will be removed in v2.')}{' '}
+        <a
+          onClick={() => navigate('/sources')}
+          style={{ color: '#1976d2', cursor: 'pointer', textDecoration: 'underline', marginLeft: 4 }}
+        >
+          {t('layout.bookSources', 'Book sources')} →
+        </a>
+      </div>
       <h1 style={{ margin: '0 0 20px', fontSize: 24, fontWeight: 700, color: '#1a1a2e' }}>
         {t('bookSources.title')}
       </h1>

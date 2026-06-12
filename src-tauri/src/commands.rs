@@ -234,6 +234,16 @@ pub async fn get_book_sources(app_handle: tauri::AppHandle) -> ApiResponse<Vec<B
 }
 
 #[tauri::command]
+pub async fn get_source_stats(
+    state: State<'_, AppState>,
+) -> Result<ApiResponse<Vec<crate::db::SourceStats>>, String> {
+    match state.source_stats.get_all().await {
+        Ok(stats) => Ok(ApiResponse { success: true, data: Some(stats), error: None }),
+        Err(e) => Ok(ApiResponse { success: false, data: None, error: Some(e.to_string()) }),
+    }
+}
+
+#[tauri::command]
 pub async fn get_enabled_book_sources(
     app_handle: tauri::AppHandle,
 ) -> ApiResponse<Vec<BookSource>> {
