@@ -204,7 +204,22 @@
     "noSubscriptions": "No subscriptions",
     "unnamed": "Unnamed",
     "addSubscriptionFailed": "Error adding subscription: {{error}}",
-    "deleteSubscriptionFailed": "Error deleting subscription: {{error}}"
+    "deleteSubscriptionFailed": "Error deleting subscription: {{error}}",
+    "sourcePending": "Waiting",
+    "sourceRunning": "Searching",
+    "sourceOk": "Done",
+    "sourceTimeout": "Timeout",
+    "sourceHttpError": "HTTP error",
+    "sourceParseError": "Parse error",
+    "failureFooterTitle": "{{count}} source(s) failed",
+    "retryAll": "Retry all",
+    "deprecationBanner": "This page has been moved to /sources and will be removed in v2.",
+    "sourceNameCol": "Name",
+    "sourceHealthCol": "Health",
+    "sourceSuccessCol": "Success rate",
+    "sourceLatencyCol": "Avg latency",
+    "sourceLastErrorCol": "Last error",
+    "sourceLastCheckedCol": "Last checked"
   },
   "explore": {
     "title": "Explore",
@@ -321,7 +336,13 @@
     "noRuleSubs": "No rule subscriptions yet",
     "ruleSubNamePlaceholder": "Subscription name",
     "ruleSubUrlPlaceholder": "Subscription URL (http/https)",
-    "invalidRuleSubUrl": "Please enter a valid http/https subscription URL"
+    "invalidRuleSubUrl": "Please enter a valid http/https subscription URL",
+    "addRuleSubLoadedSources": "Loaded {{count}} book sources",
+    "addRuleSubLoadFailed": "Failed to load book sources: {{error}}",
+    "refreshRuleSub": "Refresh",
+    "refreshingRuleSub": "Refreshing {{name}} …",
+    "refreshRuleSubLoaded": "{{name}} loaded {{count}} book sources",
+    "refreshRuleSubFailed": "Failed to refresh {{name}}: {{error}}"
   },
   "replaceRules": {
     "title": "Replace Rules",

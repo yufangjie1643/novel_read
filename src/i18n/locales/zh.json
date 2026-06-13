@@ -204,7 +204,22 @@
     "noSubscriptions": "暂无订阅",
     "unnamed": "未命名",
     "addSubscriptionFailed": "添加订阅失败：{{error}}",
-    "deleteSubscriptionFailed": "删除订阅失败：{{error}}"
+    "deleteSubscriptionFailed": "删除订阅失败：{{error}}",
+    "sourcePending": "等待",
+    "sourceRunning": "搜索中",
+    "sourceOk": "完成",
+    "sourceTimeout": "超时",
+    "sourceHttpError": "HTTP 错误",
+    "sourceParseError": "解析失败",
+    "failureFooterTitle": "搜索完成,但有 {{count}} 个源失败",
+    "retryAll": "重试全部",
+    "deprecationBanner": "此页面已迁移到 /sources,将在 v2 移除。",
+    "sourceNameCol": "名称",
+    "sourceHealthCol": "健康",
+    "sourceSuccessCol": "成功率",
+    "sourceLatencyCol": "平均延迟",
+    "sourceLastErrorCol": "最近错误",
+    "sourceLastCheckedCol": "最后检查"
   },
   "explore": {
     "title": "发现",
@@ -321,7 +336,13 @@
     "noRuleSubs": "暂无规则订阅",
     "ruleSubNamePlaceholder": "订阅名称",
     "ruleSubUrlPlaceholder": "订阅地址（http/https）",
-    "invalidRuleSubUrl": "请输入有效的 http/https 订阅地址"
+    "invalidRuleSubUrl": "请输入有效的 http/https 订阅地址",
+    "addRuleSubLoadedSources": "已加载 {{count}} 个书源",
+    "addRuleSubLoadFailed": "加载书源失败：{{error}}",
+    "refreshRuleSub": "刷新",
+    "refreshingRuleSub": "正在刷新 {{name}} …",
+    "refreshRuleSubLoaded": "{{name}} 已加载 {{count}} 个书源",
+    "refreshRuleSubFailed": "刷新 {{name}} 失败：{{error}}"
   },
   "replaceRules": {
     "title": "替换规则",

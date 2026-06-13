@@ -296,20 +296,21 @@ export default function Home() {
         openBook(activeResults[selectedIndex], sources, navigate);
       } else if (e.key === 'Escape') {
         if (state.kind === 'streaming' || state.kind === 'stalled') {
-          // Server-side cancellation via the watch channel happens on next invoke.
-          // Locally, just transition to done with whatever we have so the UI unblocks.
-          if (state.kind === 'streaming' || state.kind === 'stalled') {
-            setState({
-              kind: 'done',
-              query: state.query,
-              results: state.results,
-              statuses: state.statuses,
-              failures: state.failures,
-              totalResults: state.results.length,
-              durationMs: 0,
-              requestId: state.requestId,
-            });
-          }
+          // The previous run_stream_real continues on the backend until its
+          // 3.5s global timeout OR until a new search supersedes it (the
+          // server-side watch channel cancel fires on the next invoke).
+          // Locally, transition to 'done' so the UI unblocks and shows
+          // whatever streamed in so far.
+          setState({
+            kind: 'done',
+            query: state.query,
+            results: state.results,
+            statuses: state.statuses,
+            failures: state.failures,
+            totalResults: state.results.length,
+            durationMs: 0,
+            requestId: state.requestId,
+          });
         } else {
           setSearchKey('');
         }
@@ -444,13 +445,9 @@ export default function Home() {
     return [];
   })();
 
-  const retryOne = useCallback(
-    (_url: SourceKey) => {
-      // v1: just re-run the whole search; per-source retry is in P4 polish
-      void handleSearch(searchKey);
-    },
-    [handleSearch, searchKey]
-  );
+  const retryAll = useCallback(() => {
+    void handleSearch(searchKey);
+  }, [handleSearch, searchKey]);
 
   return (
     <div>
@@ -523,7 +520,7 @@ export default function Home() {
 
       {/* Source status strip (only when searching) */}
       {sourceStatusList.length > 0 && (
-        <SourceStatusStrip statuses={sourceStatusList} onRetry={retryOne} />
+        <SourceStatusStrip statuses={sourceStatusList} />
       )}
 
       {/* Error message */}
@@ -566,7 +563,7 @@ export default function Home() {
 
       {/* Failure footer */}
       {failureList.length > 0 && (
-        <FailureFooter failures={failureList} onRetryAll={() => handleSearch(searchKey)} />
+        <FailureFooter failures={failureList} onRetryAll={retryAll} />
       )}
 
       {/* Status: idle hint */}

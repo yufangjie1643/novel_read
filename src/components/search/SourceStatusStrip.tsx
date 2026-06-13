@@ -1,5 +1,5 @@
 import { useTranslation } from 'react-i18next';
-import type { SourceStatus as Status, SourceKey } from '../../types';
+import type { SourceStatus as Status } from '../../types';
 import { useUiMode } from '../../uiMode';
 
 const STATUS_STYLES: Record<Status['state'], { bg: string; color: string; pulse?: boolean }> = {
@@ -9,13 +9,7 @@ const STATUS_STYLES: Record<Status['state'], { bg: string; color: string; pulse?
   failed: { bg: '#f44336', color: '#fff' },
 };
 
-export default function SourceStatusStrip({
-  statuses,
-  onRetry,
-}: {
-  statuses: Status[];
-  onRetry: (url: SourceKey) => void;
-}) {
+export default function SourceStatusStrip({ statuses }: { statuses: Status[] }) {
   const { t } = useTranslation();
   const { isMobileUi } = useUiMode();
 
@@ -51,7 +45,6 @@ export default function SourceStatusStrip({
         return (
           <span
             key={s.sourceUrl}
-            onClick={() => s.state === 'failed' && onRetry(s.sourceUrl)}
             style={{
               padding: '4px 10px',
               borderRadius: 16,
@@ -59,7 +52,6 @@ export default function SourceStatusStrip({
               color: style.color,
               fontSize: 12,
               fontWeight: 500,
-              cursor: s.state === 'failed' ? 'pointer' : 'default',
               animation: style.pulse ? 'pulse 1.5s ease-in-out infinite' : 'none',
               display: 'inline-flex',
               alignItems: 'center',
@@ -75,3 +67,4 @@ export default function SourceStatusStrip({
     </div>
   );
 }
+
