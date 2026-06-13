@@ -14,9 +14,10 @@ use crate::db::{
         SearchKeywordDao, ServerDao, TxtTocRuleDao,
     },
     models::{
-        Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItemsPage,
-        ExploreKind, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord,
-        RssSource, RssStar, RuleSub, SearchBook, SearchKeyword, Server, SourceLink, TxtTocRule,
+        Book, BookChapter, BookGroup, BookSource, BookSourceSummary, Bookmark, DictRule,
+        ExploreItemsPage, ExploreKind, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule,
+        RssArticle, RssReadRecord, RssSource, RssStar, RuleSub, SearchBook, SearchKeyword,
+        Server, SourceLink, TxtTocRule,
     },
 };
 use crate::local_book::{import_epub_content, import_txt_bytes};
@@ -271,6 +272,34 @@ pub async fn get_explore_items(
             limit,
             filter.as_deref(),
         )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn get_book_source_summaries(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Vec<BookSourceSummary>> {
+    db_op(app_handle, |conn| {
+        let mut stmt = conn.prepare(
+            "SELECT bookSourceUrl, bookSourceName, bookSourceGroup,
+                    bookSourceType, enabled, enabledExplore, weight, customOrder
+             FROM book_sources
+             ORDER BY customOrder",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(BookSourceSummary {
+                book_source_url:      row.get(0)?,
+                book_source_name:      row.get(1)?,
+                book_source_group:     row.get(2)?,
+                book_source_type:      row.get(3)?,
+                enabled:               row.get(4)?,
+                enabled_explore:       row.get(5)?,
+                weight:                row.get(6)?,
+                custom_order:          row.get(7)?,
+            })
+        })?;
+        rows.collect()
     })
     .await
 }
@@ -1461,6 +1490,100 @@ pub async fn delete_rule_sub(
         RuleSubDao::new(conn).delete(id).map(|_| ())
     })
     .await
+}
+
+/// Fetch the book-source JSON at `rule_sub.url` and upsert each parsed
+/// `BookSource` into the `book_sources` table. Returns the count of
+/// sources that were successfully inserted or updated.
+///
+/// Errors before the HTTP fetch (rule sub missing, no URL set, DB error)
+/// surface through `ApiResponse.error`. Per-source upsert failures are
+/// swallowed so a single bad row does not abort the whole refresh;
+/// `last_update_time` on the rule sub is still bumped on partial success.
+#[tauri::command]
+pub async fn refresh_rule_sub_sources(
+    app_handle: tauri::AppHandle,
+    id: i64,
+) -> ApiResponse<usize> {
+    let url_resp = db_op(app_handle.clone(), move |conn| {
+        Ok::<_, rusqlite::Error>(
+            RuleSubDao::new(conn)
+                .get_all()?
+                .into_iter()
+                .find(|s| s.id == Some(id))
+                .and_then(|s| s.url),
+        )
+    })
+    .await;
+    let url = match url_resp {
+        ApiResponse {
+            success: true,
+            data: Some(Some(u)),
+            ..
+        } => u,
+        ApiResponse {
+            success: true,
+            data: Some(None),
+            ..
+        } => return err(format!("Rule sub {} not found or has no URL", id)),
+        ApiResponse {
+            success: false,
+            error: Some(e),
+            ..
+        } => return err(e),
+        _ => return err("Unexpected response loading rule sub".to_string()),
+    };
+
+    let sources = match load_source_from_url(&url).await {
+        Ok(s) => s,
+        Err(e) => return err(format!("Fetch {} failed: {}", url, e)),
+    };
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
+    db_op(app_handle, move |conn| upsert_rule_sub_sources(conn, id, sources, now))
+        .await
+}
+
+/// Upsert a list of parsed `BookSource`s into the `book_sources` table and
+/// bump the `last_update_time` on the matching `RuleSub`. Returns the number
+/// of sources that were successfully inserted or updated.
+///
+/// Public so integration tests can exercise the upsert path without going
+/// through the HTTP fetch.
+pub fn upsert_rule_sub_sources(
+    conn: &mut rusqlite::Connection,
+    rule_sub_id: i64,
+    sources: Vec<BookSource>,
+    now_ms: i64,
+) -> rusqlite::Result<usize> {
+    let dao = BookSourceDao::new(conn);
+    let mut touched = 0usize;
+    for mut src in sources {
+        src.last_update_time = now_ms;
+        let exists = dao.get(&src.book_source_url).ok().flatten().is_some();
+        let result = if exists {
+            dao.update(&src)
+        } else {
+            dao.insert(&src)
+        };
+        if result.is_ok() {
+            touched += 1;
+        }
+    }
+    let rule_dao = RuleSubDao::new(conn);
+    if let Some(mut sub) = rule_dao
+        .get_all()?
+        .into_iter()
+        .find(|s| s.id == Some(rule_sub_id))
+    {
+        sub.last_update_time = now_ms;
+        let _ = rule_dao.update(&sub);
+    }
+    Ok(touched)
 }
 
 // ============================================================================
