@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Link, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { ApiResponse, Book, BookChapter, BookGroup, BookSource, SearchBook } from '../types';
+import { isTauri } from '../utils/tauri';
 import { useUiMode } from '../uiMode';
 
 export default function Bookshelf() {
@@ -28,6 +29,11 @@ export default function Bookshelf() {
 
   const loadBookshelf = useCallback(async () => {
     setLoading(true);
+    // In browser mode (no Tauri runtime) skip IPC; show empty state.
+    if (!isTauri()) {
+      setLoading(false);
+      return;
+    }
     try {
       const [booksResp, groupsResp, sourcesResp] = await Promise.all([
         invoke<ApiResponse<Book[]>>('get_books'),
@@ -1235,227 +1241,285 @@ export default function Bookshelf() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
             gap: 20,
           }}
         >
-          {filteredBooks.map((book) => (
-            <div
-              key={book.book_url}
-              style={{
-                background: '#fff',
-                borderRadius: 12,
-                padding: 14,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10,
-                boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-                transition: 'transform 0.2s, box-shadow 0.2s',
-                cursor: batchMode ? 'pointer' : 'default',
-                position: 'relative',
-                outline: selectedBooks.has(book.book_url) ? '2px solid #1976d2' : 'none',
-              }}
-              onClick={() => {
-                if (batchMode) toggleBookSelection(book.book_url);
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.1)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)';
-              }}
-            >
-              {batchMode && (
-                <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 5 }}>
-                  <input
-                    type="checkbox"
-                    checked={selectedBooks.has(book.book_url)}
-                    onChange={() => toggleBookSelection(book.book_url)}
-                    onClick={(event) => event.stopPropagation()}
-                    style={{
-                      width: 20,
-                      height: 20,
-                      cursor: 'pointer',
-                      accentColor: '#1976d2',
-                    }}
-                  />
-                </div>
-              )}
+          {filteredBooks.map((book) => {
+            const progressPercent = book.total_chapter_num
+              ? Math.min(100, Math.max(0, ((book.dur_chapter_index ?? 0) / Math.max(1, book.total_chapter_num)) * 100))
+              : 0;
+            return (
               <div
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (batchMode) {
-                    toggleBookSelection(book.book_url);
-                    return;
-                  }
-                  navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
+                key={book.book_url}
+                className="bookshelf-card"
+                style={{
+                  background: '#fff',
+                  borderRadius: 14,
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)',
+                  transition: 'transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease',
+                  cursor: batchMode ? 'pointer' : 'default',
+                  position: 'relative',
+                  outline: selectedBooks.has(book.book_url) ? '2.5px solid #1976d2' : 'none',
                 }}
-                style={{ cursor: 'pointer' }}
+                onClick={() => {
+                  if (batchMode) toggleBookSelection(book.book_url);
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.transform = 'translateY(-4px)';
+                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.1), 0 2px 6px rgba(0,0,0,0.06)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.transform = 'translateY(0)';
+                  e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)';
+                }}
               >
-                {book.cover_url ? (
-                  <img
-                    src={book.cover_url}
-                    alt={book.name}
-                    style={{
-                      width: '100%',
-                      height: 220,
-                      objectFit: 'cover',
-                      borderRadius: 8,
-                      background: '#f0f0f0',
-                    }}
-                    onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-                  />
-                ) : (
-                  <div
-                    style={{
-                      width: '100%',
-                      height: 220,
-                      borderRadius: 8,
-                      background: 'linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#1976d2',
-                      fontSize: 14,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {book.name.slice(0, 2)}
+                {batchMode && (
+                  <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 5 }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedBooks.has(book.book_url)}
+                      onChange={() => toggleBookSelection(book.book_url)}
+                      onClick={(event) => event.stopPropagation()}
+                      style={{
+                        width: 20,
+                        height: 20,
+                        cursor: 'pointer',
+                        accentColor: '#1976d2',
+                      }}
+                    />
                   </div>
                 )}
-              </div>
-              <div
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (batchMode) {
-                    toggleBookSelection(book.book_url);
-                    return;
-                  }
-                  navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
-                }}
-                style={{
-                  fontWeight: 700,
-                  fontSize: 15,
-                  color: '#1a1a2e',
-                  cursor: 'pointer',
-                  lineHeight: 1.4,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-                title={book.name}
-              >
-                {book.name}
-              </div>
-              <div style={{ color: '#666', fontSize: 13 }}>{book.author}</div>
-              {book.dur_chapter_title && (
                 <div
-                  style={{
-                    color: '#888',
-                    fontSize: 12,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={book.dur_chapter_title}
-                >
-                  {t('bookshelf.reading', { chapter: book.dur_chapter_title })}
-                </div>
-              )}
-              <div style={{ marginTop: 'auto', display: 'flex', gap: 8 }}>
-                <Link
-                  to={`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`}
-                  onClick={(event) => {
-                    if (batchMode) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      toggleBookSelection(book.book_url);
-                    }
-                  }}
-                  style={{
-                    flex: 1,
-                    textAlign: 'center',
-                    padding: '7px 12px',
-                    background: '#1976d2',
-                    color: '#fff',
-                    borderRadius: 8,
-                    textDecoration: 'none',
-                    fontSize: 13,
-                    fontWeight: 600,
-                    transition: 'background 0.2s',
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = '#1565c0')}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = '#1976d2')}
-                >
-                  {book.dur_chapter_title ? t('bookshelf.continueReading') : t('bookshelf.read')}
-                </Link>
-                <Link
-                  to={`/book/${encodeURIComponent(book.book_url)}`}
-                  onClick={(event) => {
-                    if (batchMode) {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      toggleBookSelection(book.book_url);
-                    }
-                  }}
-                  style={{
-                    padding: '7px 12px',
-                    background: '#fff',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: 8,
-                    textDecoration: 'none',
-                    textAlign: 'center',
-                    fontSize: 13,
-                    color: '#555',
-                    fontWeight: 500,
-                    transition: 'all 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = '#f5f5f5';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = '#fff';
-                  }}
-                >
-                  {t('bookDetail.title')}
-                </Link>
-                <button
                   onClick={(event) => {
                     event.stopPropagation();
                     if (batchMode) {
                       toggleBookSelection(book.book_url);
                       return;
                     }
-                    deleteBook(book.book_url);
+                    navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
                   }}
                   style={{
-                    padding: '7px 12px',
-                    background: '#fff',
-                    border: '1px solid #e0e0e0',
-                    borderRadius: 8,
                     cursor: 'pointer',
-                    fontSize: 13,
-                    color: '#888',
-                    transition: 'all 0.2s',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = '#f44336';
-                    e.currentTarget.style.borderColor = '#ffcdd2';
-                    e.currentTarget.style.background = '#fff0f0';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = '#888';
-                    e.currentTarget.style.borderColor = '#e0e0e0';
-                    e.currentTarget.style.background = '#fff';
+                    overflow: 'hidden',
+                    position: 'relative',
                   }}
                 >
-                  {t('common.delete')}
-                </button>
+                  {book.cover_url ? (
+                    <img
+                      src={book.cover_url}
+                      alt={book.name}
+                      className="bookshelf-cover-img"
+                      style={{
+                        width: '100%',
+                        height: 260,
+                        objectFit: 'cover',
+                        display: 'block',
+                        transition: 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+                      }}
+                      onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.transform = 'scale(1.06)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.transform = 'scale(1)';
+                      }}
+                    />
+                  ) : (
+                    <div
+                      className="bookshelf-cover-placeholder"
+                      style={{
+                        width: '100%',
+                        height: 260,
+                        background: 'linear-gradient(145deg, #e8eaf6 0%, #f3e5f5 50%, #fce4ec 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#5c6bc0',
+                        fontSize: 42,
+                        fontWeight: 800,
+                        letterSpacing: '0.05em',
+                        transition: 'filter 0.3s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.filter = 'brightness(0.97)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.filter = 'brightness(1)';
+                      }}
+                    >
+                      {book.name.slice(0, 2)}
+                    </div>
+                  )}
+                  {progressPercent > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        height: 3,
+                        background: 'rgba(0,0,0,0.12)',
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: '100%',
+                          width: `${progressPercent}%`,
+                          background: 'linear-gradient(90deg, #1976d2, #42a5f5)',
+                          borderRadius: '0 2px 2px 0',
+                          transition: 'width 0.5s ease',
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+                <div style={{ padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                  <div
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (batchMode) {
+                        toggleBookSelection(book.book_url);
+                        return;
+                      }
+                      navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
+                    }}
+                    style={{
+                      fontWeight: 700,
+                      fontSize: 15,
+                      color: '#1a1a2e',
+                      cursor: 'pointer',
+                      lineHeight: 1.4,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                    title={book.name}
+                  >
+                    {book.name}
+                  </div>
+                  <div style={{ color: '#8a8a9a', fontSize: 13, fontWeight: 500 }}>{book.author || book.origin_name || '—'}</div>
+                  {book.dur_chapter_title && (
+                    <div
+                      style={{
+                        color: '#a0a0b0',
+                        fontSize: 12,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        fontWeight: 500,
+                      }}
+                      title={book.dur_chapter_title}
+                    >
+                      {t('bookshelf.reading', { chapter: book.dur_chapter_title })}
+                    </div>
+                  )}
+                  <div style={{ marginTop: 'auto', paddingTop: 12, display: 'flex', gap: 8 }}>
+                    <Link
+                      to={`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`}
+                      onClick={(event) => {
+                        if (batchMode) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleBookSelection(book.book_url);
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        textAlign: 'center',
+                        padding: '8px 12px',
+                        background: '#1976d2',
+                        color: '#fff',
+                        borderRadius: 10,
+                        textDecoration: 'none',
+                        fontSize: 13,
+                        fontWeight: 600,
+                        transition: 'all 0.2s ease',
+                        boxShadow: '0 2px 8px rgba(25,118,210,0.25)',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#1565c0';
+                        e.currentTarget.style.boxShadow = '0 4px 12px rgba(25,118,210,0.35)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#1976d2';
+                        e.currentTarget.style.boxShadow = '0 2px 8px rgba(25,118,210,0.25)';
+                      }}
+                    >
+                      {book.dur_chapter_title ? t('bookshelf.continueReading') : t('bookshelf.read')}
+                    </Link>
+                    <Link
+                      to={`/book/${encodeURIComponent(book.book_url)}`}
+                      onClick={(event) => {
+                        if (batchMode) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleBookSelection(book.book_url);
+                        }
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        background: '#f5f7fa',
+                        border: '1px solid #e8e8f0',
+                        borderRadius: 10,
+                        textDecoration: 'none',
+                        textAlign: 'center',
+                        fontSize: 13,
+                        color: '#666',
+                        fontWeight: 500,
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = '#eef1f5';
+                        e.currentTarget.style.borderColor = '#d8dce2';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = '#f5f7fa';
+                        e.currentTarget.style.borderColor = '#e8e8f0';
+                      }}
+                    >
+                      {t('bookDetail.title')}
+                    </Link>
+                    <button
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        if (batchMode) {
+                          toggleBookSelection(book.book_url);
+                          return;
+                        }
+                        deleteBook(book.book_url);
+                      }}
+                      style={{
+                        padding: '8px 12px',
+                        background: 'transparent',
+                        border: '1px solid transparent',
+                        borderRadius: 10,
+                        cursor: 'pointer',
+                        fontSize: 13,
+                        color: '#bbb',
+                        transition: 'all 0.2s ease',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.color = '#f44336';
+                        e.currentTarget.style.background = '#fff0f0';
+                        e.currentTarget.style.borderColor = '#ffcdd2';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.color = '#bbb';
+                        e.currentTarget.style.background = 'transparent';
+                        e.currentTarget.style.borderColor = 'transparent';
+                      }}
+                    >
+                      {t('common.delete')}
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
