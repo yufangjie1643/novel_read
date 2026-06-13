@@ -830,18 +830,18 @@ export default function Settings() {
             {t('settings.davRestore')}
           </button>
         </div>
-        {davMessage && (
+        {davMessage.text && (
           <div
             style={{
-              background: davMessage.includes(t('common.error')) ? '#ffebee' : '#e3f2fd',
-              color: davMessage.includes(t('common.error')) ? '#c62828' : '#1565c0',
+              background: davMessage.kind === 'error' ? '#ffebee' : '#e3f2fd',
+              color: davMessage.kind === 'error' ? '#c62828' : '#1565c0',
               padding: '8px 12px',
               borderRadius: 8,
               fontSize: 13,
               fontWeight: 500,
             }}
           >
-            {davMessage}
+            {davMessage.text}
           </div>
         )}
       </div>
