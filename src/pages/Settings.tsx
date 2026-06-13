@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import type { ApiResponse, BookSource, HttpTTS, ReplaceRule, RssSource, SourceLink } from '../types';
 import { useUiMode } from '../uiMode';
+import { useReaderPrefs } from './settings/useReaderPrefs';
 
 const DEFAULT_LEGADO_IMPORT_URL = 'https://legado.aoaostar.com/';
 const SUPPORTED_IMPORT_TYPES = new Set(['bookSource', 'rssSource', 'replaceRule', 'httpTTS']);
@@ -17,11 +18,11 @@ export default function Settings() {
   const location = useLocation();
   const { isMobileUi } = useUiMode();
   const shouldRenderSettingsDetails = !isMobileUi || location.hash.length > 0;
-  const [fontSize, setFontSize] = useState(18);
-  const [theme, setTheme] = useState('light');
-  const [ttsRate, setTtsRate] = useState(1);
-  const [lineHeight, setLineHeight] = useState(1.8);
-  const [paragraphSpacing, setParagraphSpacing] = useState(0.5);
+  const {
+    fontSize, theme, ttsRate, lineHeight, paragraphSpacing, searchConcurrency,
+    updateFontSize, updateTheme, updateTtsRate, updateLineHeight,
+    updateParagraphSpacing, updateSearchConcurrency, reset: resetReaderPrefs,
+  } = useReaderPrefs();
   const [davUrl, setDavUrl] = useState('');
   const [davUser, setDavUser] = useState('');
   const [davPass, setDavPass] = useState('');
@@ -30,7 +31,6 @@ export default function Settings() {
   const [serverRunning, setServerRunning] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
   const [serverMessage, setServerMessage] = useState('');
-  const [searchConcurrency, setSearchConcurrency] = useState(5);
   const [bulkImportUrl, setBulkImportUrl] = useState(DEFAULT_LEGADO_IMPORT_URL);
   const [bulkLinks, setBulkLinks] = useState<SourceLink[]>([]);
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
@@ -54,16 +54,8 @@ export default function Settings() {
   }, [shouldRenderSettingsDetails]);
 
   useEffect(() => {
-    setFontSize(parseInt(localStorage.getItem('reader_font_size') || '18', 10));
-    setTheme(localStorage.getItem('reader_theme') || 'light');
-    setTtsRate(parseFloat(localStorage.getItem('reader_tts_rate') || '1'));
-    setLineHeight(parseFloat(localStorage.getItem('reader_line_height') || '1.8'));
-    setParagraphSpacing(parseFloat(localStorage.getItem('reader_paragraph_spacing') || '0.5'));
     setDavUrl(localStorage.getItem('webdav_url') || '');
     setDavUser(localStorage.getItem('webdav_user') || '');
-    setSearchConcurrency(
-      Math.max(1, Math.min(20, parseInt(localStorage.getItem('search_concurrency') || '5', 10)))
-    );
   }, []);
 
   function toggleLang() {
@@ -71,51 +63,9 @@ export default function Settings() {
     i18n.changeLanguage(next);
   }
 
-  function updateFontSize(delta: number) {
-    const ns = Math.max(12, Math.min(32, fontSize + delta));
-    setFontSize(ns);
-    localStorage.setItem('reader_font_size', String(ns));
-  }
-
-  function updateTheme(tName: string) {
-    setTheme(tName);
-    localStorage.setItem('reader_theme', tName);
-  }
-
-  function updateTtsRate(r: number) {
-    setTtsRate(r);
-    localStorage.setItem('reader_tts_rate', String(r));
-  }
-
-  function updateLineHeight(v: number) {
-    setLineHeight(v);
-    localStorage.setItem('reader_line_height', String(v));
-  }
-
-  function updateParagraphSpacing(v: number) {
-    setParagraphSpacing(v);
-    localStorage.setItem('reader_paragraph_spacing', String(v));
-  }
-
-  function updateSearchConcurrency(v: number) {
-    setSearchConcurrency(v);
-    localStorage.setItem('search_concurrency', String(v));
-  }
-
   function resetSettings() {
     if (!confirm(t('settings.resetConfirm'))) return;
-    localStorage.removeItem('reader_font_size');
-    localStorage.removeItem('reader_theme');
-    localStorage.removeItem('reader_tts_rate');
-    localStorage.removeItem('reader_line_height');
-    localStorage.removeItem('reader_paragraph_spacing');
-    localStorage.removeItem('search_concurrency');
-    setFontSize(18);
-    setTheme('light');
-    setTtsRate(1);
-    setLineHeight(1.8);
-    setParagraphSpacing(0.5);
-    setSearchConcurrency(5);
+    resetReaderPrefs();
   }
 
   async function toggleServer() {
