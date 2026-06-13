@@ -36,7 +36,7 @@ function App() {
           <Route path="/replace-rules" element={<ReplaceRules />} />
           <Route path="/bookmarks" element={<Bookmarks />} />
           <Route path="/stats" element={<ReadStats />} />
-          <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/*" element={<Settings />} />
           <Route path="/book-sources" element={<BookSources />} />
           <Route path="/sources" element={<Sources />} />
           <Route path="/sources/import" element={<SourceImport />} />
