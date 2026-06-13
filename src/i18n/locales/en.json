@@ -219,7 +219,10 @@
     "sourceSuccessCol": "Success rate",
     "sourceLatencyCol": "Avg latency",
     "sourceLastErrorCol": "Last error",
-    "sourceLastCheckedCol": "Last checked"
+    "sourceLastCheckedCol": "Last checked",
+    "filterSourcesPlaceholder": "Filter by name, URL, group, or error…",
+    "sourceCountSummary": "Showing {{count}} of {{total}} sources",
+    "noMatches": "No sources match the filter."
   },
   "explore": {
     "title": "Explore",

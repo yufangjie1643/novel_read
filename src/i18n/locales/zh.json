@@ -219,7 +219,10 @@
     "sourceSuccessCol": "成功率",
     "sourceLatencyCol": "平均延迟",
     "sourceLastErrorCol": "最近错误",
-    "sourceLastCheckedCol": "最后检查"
+    "sourceLastCheckedCol": "最后检查",
+    "filterSourcesPlaceholder": "按名称、地址、分组或错误筛选…",
+    "sourceCountSummary": "显示 {{count}} / {{total}} 个书源",
+    "noMatches": "没有匹配的书源"
   },
   "explore": {
     "title": "发现",
