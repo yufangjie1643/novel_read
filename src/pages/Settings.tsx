@@ -2,17 +2,11 @@ import { useState, useEffect } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
-import type { ApiResponse, BookSource, HttpTTS, ReplaceRule, RssSource, SourceLink } from '../types';
+import type { ApiResponse } from '../types';
 import { useUiMode } from '../uiMode';
 import { useReaderPrefs } from './settings/useReaderPrefs';
 import { useWebDav } from './settings/useWebDav';
-
-const DEFAULT_LEGADO_IMPORT_URL = 'https://legado.aoaostar.com/';
-const SUPPORTED_IMPORT_TYPES = new Set(['bookSource', 'rssSource', 'replaceRule', 'httpTTS']);
-
-function importLinkKey(link: SourceLink) {
-  return `${link.link_type}|${link.source_url}`;
-}
+import { useBulkImport } from './settings/useBulkImport';
 
 export default function Settings() {
   const { t, i18n } = useTranslation();
@@ -32,12 +26,16 @@ export default function Settings() {
   const [serverRunning, setServerRunning] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
   const [serverMessage, setServerMessage] = useState('');
-  const [bulkImportUrl, setBulkImportUrl] = useState(DEFAULT_LEGADO_IMPORT_URL);
-  const [bulkLinks, setBulkLinks] = useState<SourceLink[]>([]);
-  const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
-  const [bulkLoading, setBulkLoading] = useState(false);
-  const [bulkImporting, setBulkImporting] = useState(false);
-  const [bulkMessage, setBulkMessage] = useState('');
+  const {
+    bulkImportUrl, setBulkImportUrl,
+    bulkLinks, bulkSelected, setBulkSelected,
+    bulkLoading, bulkImporting,
+    bulkMessage,
+    selectedBulkCount, supportedBulkCount,
+    importTypeLabel, isSupportedImportLink, importLinkKey,
+    setSelectedSupportedLinks,
+    loadBulkImportLinks, toggleBulkLink, importSelectedBulkLinks,
+  } = useBulkImport();
 
   useEffect(() => {
     if (!shouldRenderSettingsDetails) return;
@@ -94,135 +92,6 @@ export default function Settings() {
     }
   }
 
-  function importTypeLabel(type: string) {
-    return t(`settings.importType.${type}`, { defaultValue: type });
-  }
-
-  function isSupportedImportLink(link: SourceLink) {
-    return SUPPORTED_IMPORT_TYPES.has(link.link_type);
-  }
-
-  function setSelectedSupportedLinks(links: SourceLink[]) {
-    setBulkSelected(new Set(links.filter(isSupportedImportLink).map(importLinkKey)));
-  }
-
-  async function loadBulkImportLinks() {
-    if (!bulkImportUrl.trim()) return;
-    setBulkLoading(true);
-    setBulkMessage(t('settings.bulkImportLoading'));
-    try {
-      const resp = await invoke<ApiResponse<SourceLink[]>>('fetch_import_links_from_url', {
-        url: bulkImportUrl.trim(),
-      });
-      if (resp.success && resp.data) {
-        setBulkLinks(resp.data);
-        setSelectedSupportedLinks(resp.data);
-        setBulkMessage(t('settings.bulkImportFound', { count: resp.data.length }));
-      } else {
-        setBulkMessage(t('settings.bulkImportLoadFailed', { error: resp.error || '' }));
-      }
-    } catch (e) {
-      setBulkMessage(t('common.error', { message: String(e) }));
-    }
-    setBulkLoading(false);
-  }
-
-  function toggleBulkLink(link: SourceLink) {
-    const key = importLinkKey(link);
-    setBulkSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) {
-        next.delete(key);
-      } else {
-        next.add(key);
-      }
-      return next;
-    });
-  }
-
-  async function addAll<T>(
-    items: T[],
-    command: string,
-    argName: string
-  ): Promise<{ success: number; failed: number }> {
-    let success = 0;
-    let failed = 0;
-    for (const item of items) {
-      try {
-        const resp = await invoke<ApiResponse<null>>(command, { [argName]: item });
-        if (resp.success) success++;
-        else failed++;
-      } catch {
-        failed++;
-      }
-    }
-    return { success, failed };
-  }
-
-  async function importBulkLink(link: SourceLink) {
-    if (link.link_type === 'bookSource') {
-      const resp = await invoke<ApiResponse<BookSource[]>>('import_source_from_url', {
-        url: link.source_url,
-      });
-      if (!resp.success || !resp.data) throw new Error(resp.error || link.source_url);
-      return addAll(resp.data, 'add_book_source', 'source');
-    }
-
-    if (link.link_type === 'rssSource') {
-      const resp = await invoke<ApiResponse<RssSource[]>>('import_rss_source_from_url', {
-        url: link.source_url,
-      });
-      if (!resp.success || !resp.data) throw new Error(resp.error || link.source_url);
-      return addAll(resp.data, 'add_rss_source', 'source');
-    }
-
-    if (link.link_type === 'replaceRule') {
-      const resp = await invoke<ApiResponse<ReplaceRule[]>>('import_replace_rules_from_url', {
-        url: link.source_url,
-      });
-      if (!resp.success || !resp.data) throw new Error(resp.error || link.source_url);
-      return addAll(resp.data, 'add_replace_rule', 'rule');
-    }
-
-    if (link.link_type === 'httpTTS') {
-      const resp = await invoke<ApiResponse<HttpTTS[]>>('import_http_tts_from_url', {
-        url: link.source_url,
-      });
-      if (!resp.success || !resp.data) throw new Error(resp.error || link.source_url);
-      return addAll(resp.data, 'add_http_tts', 'tts');
-    }
-
-    return { success: 0, failed: 0 };
-  }
-
-  async function importSelectedBulkLinks() {
-    const selectedLinks = bulkLinks.filter((link) => bulkSelected.has(importLinkKey(link)));
-    if (selectedLinks.length === 0) return;
-
-    setBulkImporting(true);
-    setBulkMessage(t('settings.bulkImportInstalling', { count: selectedLinks.length }));
-    let imported = 0;
-    let failed = 0;
-    let unsupported = 0;
-
-    for (const link of selectedLinks) {
-      if (!isSupportedImportLink(link)) {
-        unsupported++;
-        continue;
-      }
-      try {
-        const result = await importBulkLink(link);
-        imported += result.success;
-        failed += result.failed;
-      } catch {
-        failed++;
-      }
-    }
-
-    setBulkMessage(t('settings.bulkImportResult', { imported, failed, unsupported }));
-    setBulkImporting(false);
-  }
-
   const sectionStyle: React.CSSProperties = {
     background: '#fff',
     borderRadius: 8,
@@ -264,8 +133,6 @@ export default function Settings() {
     color: '#555',
   };
 
-  const selectedBulkCount = bulkSelected.size;
-  const supportedBulkCount = bulkLinks.filter(isSupportedImportLink).length;
   const mobileMineHeader = isMobileUi ? (
     <>
       <header className="android-profile-head">
@@ -690,18 +557,18 @@ export default function Settings() {
           </>
         )}
 
-        {bulkMessage && (
+        {bulkMessage.text && (
           <div
             style={{
-              background: bulkMessage.includes(t('common.error')) ? '#ffebee' : '#e3f2fd',
-              color: bulkMessage.includes(t('common.error')) ? '#c62828' : '#1565c0',
+              background: bulkMessage.kind === 'error' ? '#ffebee' : '#e3f2fd',
+              color: bulkMessage.kind === 'error' ? '#c62828' : '#1565c0',
               padding: '8px 12px',
               borderRadius: 8,
               fontSize: 13,
               fontWeight: 500,
             }}
           >
-            {bulkMessage}
+            {bulkMessage.text}
           </div>
         )}
       </div>
