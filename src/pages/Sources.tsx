@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { ApiResponse, BookSource, SourceStats } from '../types';
 import { useUiMode } from '../uiMode';
+import { isTauri } from '../utils/tauri';
 
 type SortKey = 'name' | 'health' | 'success' | 'latency' | 'lastChecked';
 type SortDir = 'asc' | 'desc';
@@ -22,6 +23,8 @@ export default function Sources() {
   }, []);
 
   async function load() {
+    // Browser mode (no Tauri runtime) — skip IPC, render empty state.
+    if (!isTauri()) return;
     try {
       const [srcResp, statsResp] = await Promise.all([
         invoke<ApiResponse<BookSource[]>>('get_book_sources'),
