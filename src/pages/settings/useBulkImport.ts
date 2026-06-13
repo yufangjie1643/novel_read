@@ -24,7 +24,7 @@ export function useBulkImport() {
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkImporting, setBulkImporting] = useState(false);
-  const [bulkMessage, setBulkMessage] = useState<{ text: string; kind: 'idle' | 'info' | 'error' }>({
+  const [bulkMessage, setBulkMessage] = useState<{ text: string; kind: 'idle' | 'error' | 'info' }>({
     text: '',
     kind: 'idle',
   });
