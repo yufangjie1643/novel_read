@@ -155,6 +155,29 @@ pub struct BookSource {
     pub rule_review: Option<String>,
 }
 
+/// Lightweight projection of `BookSource` for list rendering and future
+/// filter / batch operations. Excludes all search / explore / chapter rules
+/// and request / response headers — the list page never reads them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BookSourceSummary {
+    #[serde(rename = "bookSourceUrl")]
+    pub book_source_url: String,
+    #[serde(rename = "bookSourceName")]
+    pub book_source_name: String,
+    #[serde(rename = "bookSourceGroup")]
+    pub book_source_group: Option<String>,
+    #[serde(rename = "bookSourceType")]
+    pub book_source_type: i32,
+    #[serde(rename = "enabled")]
+    pub enabled: bool,
+    #[serde(rename = "enabledExplore")]
+    pub enabled_explore: bool,
+    #[serde(rename = "weight")]
+    pub weight: i32,
+    #[serde(rename = "customOrder")]
+    pub custom_order: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ExploreItem {
     pub id: String,

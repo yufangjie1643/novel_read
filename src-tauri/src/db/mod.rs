@@ -19,7 +19,7 @@ pub use dao::{
     RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao, SearchKeywordDao,
     ServerDao, TxtTocRuleDao,
 };
-pub use models::{BookSource, RssSource, RuleSub};
+pub use models::{BookSource, BookSourceSummary, RssSource, RuleSub};
 pub use source_stats_dao::{compute_health, HealthInputs, SourceStats, SourceStatsDao};
 
 /// Pool size used for the shared `deadpool-sqlite` connection pool.
