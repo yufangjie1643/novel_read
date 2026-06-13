@@ -8,7 +8,7 @@ import { useReaderPrefs } from './settings/useReaderPrefs';
 import { useWebDav } from './settings/useWebDav';
 import { useBulkImport } from './settings/useBulkImport';
 import SettingsReader from './settings/SettingsReader';
-import { useSettingsStyles } from './settings/styles';
+import { btnStyle, useSettingsStyles } from './settings/styles';
 
 export default function Settings() {
   const { t, i18n } = useTranslation();
@@ -90,17 +90,6 @@ export default function Settings() {
       }
     }
   }
-
-  const btnStyle: React.CSSProperties = {
-    padding: '6px 14px',
-    fontSize: 14,
-    border: '1px solid #ddd',
-    borderRadius: 8,
-    background: '#fff',
-    cursor: 'pointer',
-    fontWeight: 500,
-    color: '#555',
-  };
 
   const mobileMineHeader = isMobileUi ? (
     <>

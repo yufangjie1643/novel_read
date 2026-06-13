@@ -1,6 +1,17 @@
 import type { CSSProperties } from 'react';
 import { useUiMode } from '../../uiMode';
 
+export const btnStyle: CSSProperties = {
+  padding: '6px 14px',
+  fontSize: 14,
+  border: '1px solid #ddd',
+  borderRadius: 8,
+  background: '#fff',
+  cursor: 'pointer',
+  fontWeight: 500,
+  color: '#555',
+};
+
 export function useSettingsStyles() {
   const { isMobileUi } = useUiMode();
   const sectionStyle: CSSProperties = {

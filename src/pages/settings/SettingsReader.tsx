@@ -1,17 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useReaderPrefs } from './useReaderPrefs';
-import { useSettingsStyles } from './styles';
-
-const btnStyle: React.CSSProperties = {
-  padding: '6px 14px',
-  fontSize: 14,
-  border: '1px solid #ddd',
-  borderRadius: 8,
-  background: '#fff',
-  cursor: 'pointer',
-  fontWeight: 500,
-  color: '#555',
-};
+import { btnStyle, useSettingsStyles } from './styles';
 
 export default function SettingsReader() {
   const { t } = useTranslation();
