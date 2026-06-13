@@ -170,6 +170,12 @@ pub struct ExploreItemsPage {
     pub total: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ExploreKind {
+    pub title: String,
+    pub url: Option<String>,
+}
+
 impl Default for BookSource {
     fn default() -> Self {
         Self {
@@ -480,6 +486,7 @@ pub struct TxtTocRule {
     pub id: Option<i64>,
     pub name: Option<String>,
     pub rule: Option<String>,
+    pub example: Option<String>,
     pub enabled: bool,
     pub order: i32,
 }
@@ -509,7 +516,9 @@ pub struct DictRule {
     pub id: Option<i64>,
     pub name: Option<String>,
     pub url: Option<String>,
+    pub show_rule: Option<String>,
     pub enabled: bool,
+    pub sort_number: i32,
 }
 
 // ============================================================================
