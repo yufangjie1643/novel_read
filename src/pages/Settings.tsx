@@ -7,17 +7,16 @@ import { useUiMode } from '../uiMode';
 import { useReaderPrefs } from './settings/useReaderPrefs';
 import { useWebDav } from './settings/useWebDav';
 import { useBulkImport } from './settings/useBulkImport';
+import SettingsReader from './settings/SettingsReader';
+import { useSettingsStyles } from './settings/styles';
 
 export default function Settings() {
   const { t, i18n } = useTranslation();
   const location = useLocation();
   const { isMobileUi } = useUiMode();
+  const { sectionStyle, sectionTitle, rowStyle, labelStyle } = useSettingsStyles();
   const shouldRenderSettingsDetails = !isMobileUi || location.hash.length > 0;
-  const {
-    fontSize, theme, ttsRate, lineHeight, paragraphSpacing, searchConcurrency,
-    updateFontSize, updateTheme, updateTtsRate, updateLineHeight,
-    updateParagraphSpacing, updateSearchConcurrency, reset: resetReaderPrefs,
-  } = useReaderPrefs();
+  const { fontSize, reset: resetReaderPrefs } = useReaderPrefs();
   const {
     davUrl, setDavUrl, davUser, setDavUser, davPass, setDavPass,
     davMessage, davLoading,
@@ -91,36 +90,6 @@ export default function Settings() {
       }
     }
   }
-
-  const sectionStyle: React.CSSProperties = {
-    background: '#fff',
-    borderRadius: 8,
-    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-    padding: isMobileUi ? 16 : 24,
-    marginBottom: 20,
-  };
-
-  const sectionTitle: React.CSSProperties = {
-    fontSize: 16,
-    fontWeight: 700,
-    color: '#1a1a2e',
-    margin: '0 0 16px',
-  };
-
-  const rowStyle: React.CSSProperties = {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: isMobileUi ? 'stretch' : 'center',
-    flexDirection: isMobileUi ? 'column' : 'row',
-    gap: isMobileUi ? 8 : 12,
-    padding: '12px 0',
-    borderBottom: '1px solid #f8f8f8',
-  };
-
-  const labelStyle: React.CSSProperties = {
-    fontSize: 14,
-    color: '#555',
-  };
 
   const btnStyle: React.CSSProperties = {
     padding: '6px 14px',
@@ -209,130 +178,7 @@ export default function Settings() {
       </div>
 
       {/* Reader Settings */}
-      <div id="appearance" style={sectionStyle}>
-        <div style={sectionTitle}>{t('settings.reader')}</div>
-
-        {/* Font size */}
-        <div style={rowStyle}>
-          <span style={labelStyle}>{t('reader.fontSize')}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <button onClick={() => updateFontSize(-1)} style={{ ...btnStyle, padding: '4px 12px' }}>
-              −
-            </button>
-            <span style={{ fontSize: 14, fontWeight: 600, minWidth: 28, textAlign: 'center' }}>
-              {fontSize}
-            </span>
-            <button onClick={() => updateFontSize(1)} style={{ ...btnStyle, padding: '4px 12px' }}>
-              +
-            </button>
-          </div>
-        </div>
-
-        {/* Theme */}
-        <div style={rowStyle}>
-          <span style={labelStyle}>{t('reader.theme')}</span>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {(['light', 'dark', 'sepia'] as const).map((tName) => (
-              <button
-                key={tName}
-                onClick={() => updateTheme(tName)}
-                style={{
-                  padding: '6px 14px',
-                  fontSize: 13,
-                  borderRadius: 8,
-                  border: '1px solid',
-                  borderColor: theme === tName ? '#1976d2' : '#e0e0e0',
-                  background: theme === tName ? '#eef4fd' : '#fff',
-                  color: theme === tName ? '#1976d2' : '#555',
-                  cursor: 'pointer',
-                  fontWeight: theme === tName ? 600 : 500,
-                }}
-              >
-                {t(`reader.theme${tName.charAt(0).toUpperCase() + tName.slice(1)}`)}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* TTS Rate */}
-        <div style={rowStyle}>
-          <span style={labelStyle}>{t('reader.ttsSpeed')}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <input
-              type="range"
-              min={0.5}
-              max={2}
-              step={0.1}
-              value={ttsRate}
-              onChange={(e) => updateTtsRate(parseFloat(e.target.value))}
-              style={{ width: 120 }}
-            />
-            <span style={{ fontSize: 14, fontWeight: 600, minWidth: 36 }}>
-              {ttsRate.toFixed(1)}x
-            </span>
-          </div>
-        </div>
-
-        {/* Line height */}
-        <div style={rowStyle}>
-          <span style={labelStyle}>{t('reader.lineHeight')}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <input
-              type="range"
-              min={1.2}
-              max={2.5}
-              step={0.1}
-              value={lineHeight}
-              onChange={(e) => updateLineHeight(parseFloat(e.target.value))}
-              style={{ width: 120 }}
-            />
-            <span style={{ fontSize: 14, fontWeight: 600, minWidth: 36 }}>
-              {lineHeight.toFixed(1)}
-            </span>
-          </div>
-        </div>
-
-        {/* Paragraph spacing */}
-        <div style={rowStyle}>
-          <span style={labelStyle}>{t('reader.paragraphSpacing')}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <input
-              type="range"
-              min={0}
-              max={2}
-              step={0.1}
-              value={paragraphSpacing}
-              onChange={(e) => updateParagraphSpacing(parseFloat(e.target.value))}
-              style={{ width: 120 }}
-            />
-            <span style={{ fontSize: 14, fontWeight: 600, minWidth: 36 }}>
-              {paragraphSpacing.toFixed(1)}em
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Search Settings */}
-      <div style={sectionStyle}>
-        <div style={sectionTitle}>{t('settings.search')}</div>
-        <div style={rowStyle}>
-          <span style={labelStyle}>{t('settings.searchConcurrency')}</span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <input
-              type="range"
-              min={1}
-              max={20}
-              step={1}
-              value={searchConcurrency}
-              onChange={(e) => updateSearchConcurrency(parseInt(e.target.value, 10))}
-              style={{ width: 120 }}
-            />
-            <span style={{ fontSize: 14, fontWeight: 600, minWidth: 28, textAlign: 'center' }}>
-              {searchConcurrency}
-            </span>
-          </div>
-        </div>
-      </div>
+      <SettingsReader />
 
       {/* Tools */}
       <div style={sectionStyle}>
