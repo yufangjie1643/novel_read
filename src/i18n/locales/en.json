@@ -736,6 +736,8 @@
     "catTheme": "Theme",
     "catBackup": "Backup",
     "catOther": "Other",
+    "catBulkImport": "Bulk Import",
+    "catServer": "Server",
     "catGeneral": "General",
     "catAdvanced": "Advanced",
     "catAbout": "About",

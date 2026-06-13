@@ -45,13 +45,13 @@ export default function SettingsSidebar() {
         to="/settings/bulk-import"
         style={({ isActive }) => ({ ...linkStyle, ...(isActive ? activeStyle : {}) })}
       >
-        {t('settings.catOther')}
+        {t('settings.catBulkImport')}
       </NavLink>
       <NavLink
         to="/settings/server"
         style={({ isActive }) => ({ ...linkStyle, ...(isActive ? activeStyle : {}) })}
       >
-        {t('settings.catOther')}
+        {t('settings.catServer')}
       </NavLink>
       <NavLink
         to="/settings/other"

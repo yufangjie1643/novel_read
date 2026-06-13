@@ -736,6 +736,8 @@
     "catTheme": "主题",
     "catBackup": "备份",
     "catOther": "其它",
+    "catBulkImport": "批量导入",
+    "catServer": "服务",
     "catGeneral": "通用",
     "catAdvanced": "高级",
     "catAbout": "关于",

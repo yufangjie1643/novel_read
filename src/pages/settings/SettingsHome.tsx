@@ -35,16 +35,6 @@ export default function SettingsHome({ fontSize }: Props) {
 
       <div className="android-settings-panel">
         <h2>{t('settings.title')}</h2>
-        <Link to="/settings/reader">
-          <img src="/mobile-media/my_center_theme_icon.svg" alt="" />
-          <span>{t('settings.mobileThemeEntry')}</span>
-          <small>{t('settings.mobileThemeDesc')}</small>
-        </Link>
-        <Link to="/settings/backup">
-          <img src="/mobile-media/my_center_cloud_icon.svg" alt="" />
-          <span>{t('settings.mobileWebdavEntry')}</span>
-          <small>{t('settings.mobileWebdavDesc')}</small>
-        </Link>
         <Link to="/book-sources">
           <img src="/mobile-media/my_center_book_icon.svg" alt="" />
           <span>{t('layout.bookSources')}</span>
@@ -66,7 +56,7 @@ export default function SettingsHome({ fontSize }: Props) {
           <span>{t('settings.catBackup')}</span>
         </Link>
         <Link to="/settings/bulk-import">
-          <span>{t('settings.catOther', { defaultValue: '其它' })}</span>
+          <span>{t('settings.catBulkImport')}</span>
         </Link>
         <Link to="/settings/other">
           <span>{t('settings.catOther')}</span>
