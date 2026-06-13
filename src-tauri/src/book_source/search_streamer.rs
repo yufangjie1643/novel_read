@@ -108,6 +108,8 @@ pub async fn run_stream<S: SearchSink + 'static>(
     let total_results = Arc::new(AtomicUsize::new(0));
     let send_failures = Arc::new(AtomicUsize::new(0));
 
+    eprintln!("[run_stream_real] starting {total} sources");
+
     let sem = Arc::new(Semaphore::new(MAX_CONCURRENCY));
     let mut join_set = tokio::task::JoinSet::new();
     let q_shared: Arc<str> = Arc::from(query);
@@ -170,6 +172,7 @@ pub async fn run_stream<S: SearchSink + 'static>(
                         book.author = mb.author;
                         book.origin = src.url.clone();
                         let score = crate::book_source::relevance::ScoreBreakdown {
+                            all_query_present: 0,
                             words: 0,
                             typo: 0,
                             proximity: 0,
@@ -270,6 +273,8 @@ pub async fn run_stream_real<S: SearchSink + 'static>(
     let failed = Arc::new(AtomicUsize::new(0));
     let total_results = Arc::new(AtomicUsize::new(0));
     let send_failures = Arc::new(AtomicUsize::new(0));
+
+    eprintln!("[run_stream_real] starting {total} sources");
 
     let sem = Arc::new(Semaphore::new(MAX_CONCURRENCY));
     let mut join_set = tokio::task::JoinSet::new();

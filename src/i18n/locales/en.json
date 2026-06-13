@@ -214,6 +214,8 @@
     "failureFooterTitle": "{{count}} source(s) failed",
     "retryAll": "Retry all",
     "deprecationBanner": "This page has been moved to /sources and will be removed in v2.",
+    "clickToExpandSources": "Click to expand source list",
+    "more": "more",
     "sourceNameCol": "Name",
     "sourceHealthCol": "Health",
     "sourceSuccessCol": "Success rate",

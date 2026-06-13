@@ -214,6 +214,8 @@
     "failureFooterTitle": "搜索完成,但有 {{count}} 个源失败",
     "retryAll": "重试全部",
     "deprecationBanner": "此页面已迁移到 /sources,将在 v2 移除。",
+    "clickToExpandSources": "点击展开书源列表",
+    "more": "更多",
     "sourceNameCol": "名称",
     "sourceHealthCol": "健康",
     "sourceSuccessCol": "成功率",

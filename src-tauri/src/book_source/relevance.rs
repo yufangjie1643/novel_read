@@ -6,6 +6,11 @@ use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScoreBreakdown {
+    /// Rule 0: every unique char in the query is present in the title.
+    /// This is the strongest discriminator — a partial substring match
+    /// (e.g. "体" matching "霸体") scores 0 here, while a full match
+    /// (e.g. "三体" matching "三体") scores 1.
+    pub all_query_present: u8,
     pub words: u8,
     pub typo: u8,
     pub proximity: u8,
@@ -85,8 +90,28 @@ pub fn score(
     let author = normalize_text(book_author.unwrap_or(""));
     let intro = normalize_text(book_intro.unwrap_or(""));
 
-    // Rule 1: words — query word count in title+author
+    // Rule 0: all_query_present — every unique char in q is in title.
+    // Single-char / empty queries score 1 (no discrimination needed).
     let q_chars: Vec<char> = q.chars().collect();
+    let all_query_present: u8 = if q_chars.len() < 2 {
+        1
+    } else {
+        let mut all_present = true;
+        let mut seen: Vec<char> = Vec::with_capacity(q_chars.len());
+        for &c in &q_chars {
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            if !title.chars().any(|t| t == c) {
+                all_present = false;
+                break;
+            }
+        }
+        if all_present { 1 } else { 0 }
+    };
+
+    // Rule 1: words — query substring hits in title+author
     let title_hits = count_substring_hits(&q, &title);
     let author_hits = count_substring_hits(&q, &author);
     let intro_hits = count_substring_hits(&q, &intro);
@@ -128,6 +153,7 @@ pub fn score(
     let source_health_u8 = (source_health.clamp(0.0, 1.0) * 100.0) as u8;
 
     ScoreBreakdown {
+        all_query_present,
         words,
         typo,
         proximity,
@@ -188,9 +214,14 @@ fn first_match_position(needle: &str, haystack: &str) -> usize {
 
 impl Ord for ScoreBreakdown {
     fn cmp(&self, other: &Self) -> Ordering {
-        // Higher words/typo/weight/rank/health = better; Lower proximity/position = better
-        self.words
-            .cmp(&other.words)
+        // Higher all_query_present/words/typo/weight/rank/health = better;
+        // Lower proximity/position = better.
+        // all_query_present is the strongest discriminator (DESC): a result
+        // where every query char is present in the title outranks one with
+        // only a partial substring match.
+        self.all_query_present
+            .cmp(&other.all_query_present)
+            .then(self.words.cmp(&other.words))
             .then(self.typo.cmp(&other.typo))
             .then(other.proximity.cmp(&self.proximity))
             .then(self.source_weight.cmp(&other.source_weight))
@@ -269,5 +300,47 @@ mod tests {
         let high_weight = score("三体", Some("刘慈欣"), None, "三体", 100, 1.0);
         let low_weight = score("三体", Some("刘慈欣"), None, "三体", 0, 1.0);
         assert!(high_weight > low_weight, "higher source weight should win");
+    }
+
+    #[test]
+    fn all_query_present_full_match() {
+        // "三体" has both 三 and 体 in the title "三体" → present=1
+        let full = score("三体", Some("刘慈欣"), None, "三体", 0, 1.0);
+        assert_eq!(full.all_query_present, 1);
+    }
+
+    #[test]
+    fn all_query_present_partial_match_penalized() {
+        // "霸体诀" has only 体 in common with "三体" → present=0
+        let partial = score("霸体诀", Some("某作者"), None, "三体", 0, 1.0);
+        assert_eq!(partial.all_query_present, 0);
+    }
+
+    #[test]
+    fn all_query_present_ranks_full_above_partial() {
+        // The fix for the user's bug: "三体" search returning "霸体诀" results
+        let full = score("三体", Some("刘慈欣"), Some("科幻"), "三体", 0, 1.0);
+        let partial = score("霸体诀", Some("某作者"), Some("修仙"), "三体", 0, 1.0);
+        assert!(
+            full > partial,
+            "full query match (三体→三体) must outrank partial substring match (三体→霸体诀)"
+        );
+    }
+
+    #[test]
+    fn all_query_present_single_char_query_always_1() {
+        // Single char queries have no discrimination, so all should be 1
+        let a = score("体", Some("刘慈欣"), None, "体", 0, 1.0);
+        let b = score("霸", Some("某"), None, "体", 0, 1.0);
+        assert_eq!(a.all_query_present, 1);
+        assert_eq!(b.all_query_present, 1);
+    }
+
+    #[test]
+    fn all_query_present_handles_repeats() {
+        // Repeats in the query (e.g. "三三体") still score 1 if every unique
+        // char is in the title.
+        let r = score("三体", Some("刘"), None, "三三体", 0, 1.0);
+        assert_eq!(r.all_query_present, 1);
     }
 }
