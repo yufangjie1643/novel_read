@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import type { ApiResponse, BookSource, HttpTTS, ReplaceRule, RssSource, SourceLink } from '../types';
 import { useUiMode } from '../uiMode';
 import { useReaderPrefs } from './settings/useReaderPrefs';
+import { useWebDav } from './settings/useWebDav';
 
 const DEFAULT_LEGADO_IMPORT_URL = 'https://legado.aoaostar.com/';
 const SUPPORTED_IMPORT_TYPES = new Set(['bookSource', 'rssSource', 'replaceRule', 'httpTTS']);
@@ -23,11 +24,11 @@ export default function Settings() {
     updateFontSize, updateTheme, updateTtsRate, updateLineHeight,
     updateParagraphSpacing, updateSearchConcurrency, reset: resetReaderPrefs,
   } = useReaderPrefs();
-  const [davUrl, setDavUrl] = useState('');
-  const [davUser, setDavUser] = useState('');
-  const [davPass, setDavPass] = useState('');
-  const [davMessage, setDavMessage] = useState('');
-  const [davLoading, setDavLoading] = useState(false);
+  const {
+    davUrl, setDavUrl, davUser, setDavUser, davPass, setDavPass,
+    davMessage, davLoading,
+    testWebDav, backupToWebDav, restoreFromWebDav,
+  } = useWebDav();
   const [serverRunning, setServerRunning] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
   const [serverMessage, setServerMessage] = useState('');
@@ -52,11 +53,6 @@ export default function Settings() {
     }
     checkServerStatus();
   }, [shouldRenderSettingsDetails]);
-
-  useEffect(() => {
-    setDavUrl(localStorage.getItem('webdav_url') || '');
-    setDavUser(localStorage.getItem('webdav_user') || '');
-  }, []);
 
   function toggleLang() {
     const next = i18n.language === 'zh' ? 'en' : 'zh';
@@ -96,81 +92,6 @@ export default function Settings() {
         setServerMessage(t('common.error', { message: String(e) }));
       }
     }
-  }
-
-  async function testWebDav() {
-    if (!davUrl.trim()) {
-      setDavMessage(t('settings.davUrlRequired'));
-      return;
-    }
-    setDavLoading(true);
-    setDavMessage(t('settings.davTesting'));
-    try {
-      const resp = await invoke<ApiResponse<null>>('test_webdav_connection', {
-        url: davUrl.trim(),
-        username: davUser.trim() || null,
-        password: davPass.trim() || null,
-      });
-      if (resp.success) {
-        setDavMessage(t('settings.davTestSuccess'));
-        localStorage.setItem('webdav_url', davUrl.trim());
-        localStorage.setItem('webdav_user', davUser.trim());
-      } else {
-        setDavMessage(t('settings.davTestFailed', { error: resp.error || '' }));
-      }
-    } catch (e) {
-      setDavMessage(t('common.error', { message: String(e) }));
-    }
-    setDavLoading(false);
-  }
-
-  async function backupToWebDav() {
-    if (!davUrl.trim()) {
-      setDavMessage(t('settings.davUrlRequired'));
-      return;
-    }
-    setDavLoading(true);
-    setDavMessage(t('settings.davBackingUp'));
-    try {
-      const resp = await invoke<ApiResponse<string>>('backup_to_webdav', {
-        url: davUrl.trim(),
-        username: davUser.trim() || null,
-        password: davPass.trim() || null,
-      });
-      if (resp.success) {
-        setDavMessage(t('settings.davBackupSuccess', { name: resp.data || '' }));
-      } else {
-        setDavMessage(t('settings.davBackupFailed', { error: resp.error || '' }));
-      }
-    } catch (e) {
-      setDavMessage(t('common.error', { message: String(e) }));
-    }
-    setDavLoading(false);
-  }
-
-  async function restoreFromWebDav() {
-    if (!davUrl.trim()) {
-      setDavMessage(t('settings.davUrlRequired'));
-      return;
-    }
-    if (!confirm(t('settings.davRestoreConfirm'))) return;
-    setDavLoading(true);
-    setDavMessage(t('settings.davRestoring'));
-    try {
-      const resp = await invoke<ApiResponse<string>>('restore_from_webdav', {
-        url: davUrl.trim(),
-        username: davUser.trim() || null,
-        password: davPass.trim() || null,
-      });
-      if (resp.success) {
-        setDavMessage(t('settings.davRestoreSuccess'));
-      } else {
-        setDavMessage(t('settings.davRestoreFailed', { error: resp.error || '' }));
-      }
-    } catch (e) {
-      setDavMessage(t('common.error', { message: String(e) }));
-    }
-    setDavLoading(false);
   }
 
   function importTypeLabel(type: string) {
