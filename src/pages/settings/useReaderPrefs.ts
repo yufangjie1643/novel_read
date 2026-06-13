@@ -35,13 +35,19 @@ export function useReaderPrefs() {
       Number(localStorage.getItem(KEY_MAP.paragraphSpacing)) || DEFAULTS.paragraphSpacing,
     );
     setSearchConcurrency(
-      Number(localStorage.getItem(KEY_MAP.searchConcurrency)) || DEFAULTS.searchConcurrency,
+      Math.max(
+        1,
+        Math.min(
+          20,
+          Number(localStorage.getItem(KEY_MAP.searchConcurrency)) || DEFAULTS.searchConcurrency,
+        ),
+      ),
     );
   }, []);
 
   const updateFontSize = useCallback((delta: number) => {
     setFontSize((prev) => {
-      const next = Math.max(12, Math.min(36, prev + delta));
+      const next = Math.max(12, Math.min(32, prev + delta));
       localStorage.setItem(KEY_MAP.fontSize, String(next));
       return next;
     });
