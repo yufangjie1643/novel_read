@@ -8,7 +8,7 @@ export default function SettingsOther() {
   const { t, i18n } = useTranslation();
   const { reset: resetReaderPrefs } = useReaderPrefs();
   const { sectionStyle, sectionTitle, rowStyle, labelStyle } = useSettingsStyles();
-  const { serverRunning, serverUrl, serverMessage, toggleServer } = useServerControl();
+  const { serverRunning, serverUrl, serverMessage, toggling, toggleServer } = useServerControl();
 
   function toggleLang() {
     const next = i18n.language === 'zh' ? 'en' : 'zh';
@@ -122,6 +122,7 @@ export default function SettingsOther() {
           </span>
           <button
             onClick={toggleServer}
+            disabled={toggling}
             style={{
               padding: '6px 14px',
               fontSize: 13,

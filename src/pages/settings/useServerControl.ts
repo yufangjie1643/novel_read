@@ -11,6 +11,7 @@ export function useServerControl() {
     text: '',
     kind: 'idle',
   });
+  const [toggling, setToggling] = useState(false);
 
   useEffect(() => {
     async function checkServerStatus() {
@@ -27,39 +28,46 @@ export function useServerControl() {
   }, []);
 
   const toggleServer = useCallback(async () => {
-    if (serverRunning) {
-      try {
-        await invoke('stop_web_server');
-        setServerRunning(false);
-        setServerUrl('');
-      } catch (e) {
-        setServerMessage({ text: t('common.error', { message: String(e) }), kind: 'error' });
-      }
-    } else {
-      try {
-        const resp = await invoke<ApiResponse<string>>('start_web_server', { port: 1122 });
-        if (resp.success && resp.data) {
-          setServerRunning(true);
-          setServerUrl(resp.data);
-          setServerMessage({ text: t('bookshelf.serverStarted', { url: resp.data }), kind: 'info' });
-        } else {
-          const errMsg = resp.error || '';
-          if (errMsg.includes('all ports in range are in use')) {
-            setServerMessage({ text: t('bookshelf.serverPortInUse'), kind: 'error' });
-          } else {
-            setServerMessage({ text: t('bookshelf.serverStartFailed', { error: errMsg }), kind: 'error' });
-          }
+    if (toggling) return;
+    setToggling(true);
+    try {
+      if (serverRunning) {
+        try {
+          await invoke('stop_web_server');
+          setServerRunning(false);
+          setServerUrl('');
+        } catch (e) {
+          setServerMessage({ text: t('common.error', { message: String(e) }), kind: 'error' });
         }
-      } catch (e) {
-        setServerMessage({ text: t('common.error', { message: String(e) }), kind: 'error' });
+      } else {
+        try {
+          const resp = await invoke<ApiResponse<string>>('start_web_server', { port: 1122 });
+          if (resp.success && resp.data) {
+            setServerRunning(true);
+            setServerUrl(resp.data);
+            setServerMessage({ text: t('bookshelf.serverStarted', { url: resp.data }), kind: 'info' });
+          } else {
+            const errMsg = resp.error || '';
+            if (errMsg.includes('all ports in range are in use')) {
+              setServerMessage({ text: t('bookshelf.serverPortInUse'), kind: 'error' });
+            } else {
+              setServerMessage({ text: t('bookshelf.serverStartFailed', { error: errMsg }), kind: 'error' });
+            }
+          }
+        } catch (e) {
+          setServerMessage({ text: t('common.error', { message: String(e) }), kind: 'error' });
+        }
       }
+    } finally {
+      setToggling(false);
     }
-  }, [serverRunning, t]);
+  }, [serverRunning, toggling, t]);
 
   return {
     serverRunning,
     serverUrl,
     serverMessage,
+    toggling,
     toggleServer,
   };
 }
