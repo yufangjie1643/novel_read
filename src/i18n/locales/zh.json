@@ -732,6 +732,13 @@
       "readConfig": "排版"
     },
     "about": "关于",
-    "aboutDesc": "Legado Desktop 是开源阅读 Legado 的桌面版实现，基于 Tauri + React + Rust。"
+    "aboutDesc": "Legado Desktop 是开源阅读 Legado 的桌面版实现，基于 Tauri + React + Rust。",
+    "catTheme": "主题",
+    "catBackup": "备份",
+    "catOther": "其它",
+    "catGeneral": "通用",
+    "catAdvanced": "高级",
+    "catAbout": "关于",
+    "settingsNav": "设置"
   }
 }

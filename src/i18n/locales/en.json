@@ -732,6 +732,13 @@
       "readConfig": "Layout"
     },
     "about": "About",
-    "aboutDesc": "Legado Desktop is a desktop reimplementation of the Legado open-source reader, built with Tauri + React + Rust."
+    "aboutDesc": "Legado Desktop is a desktop reimplementation of the Legado open-source reader, built with Tauri + React + Rust.",
+    "catTheme": "Theme",
+    "catBackup": "Backup",
+    "catOther": "Other",
+    "catGeneral": "General",
+    "catAdvanced": "Advanced",
+    "catAbout": "About",
+    "settingsNav": "Settings"
   }
 }
