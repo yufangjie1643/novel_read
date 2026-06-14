@@ -75,7 +75,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   ] as const;
 
   function toggleLang() {
-    const next = i18n.language === 'zh' ? 'en' : 'zh';
+    const next = i18n.language.startsWith('zh') ? 'en' : 'zh';
     i18n.changeLanguage(next);
   }
 
@@ -198,7 +198,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                 color: '#555',
               }}
             >
-              {i18n.language === 'zh' ? t('layout.langEn') : t('layout.langZh')}
+              {i18n.language.startsWith('zh') ? t('layout.langEn') : t('layout.langZh')}
             </button>
           </div>
         </nav>

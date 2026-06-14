@@ -15,7 +15,7 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
   const { serverRunning, serverUrl, serverMessage, toggling, toggleServer } = useServerControl();
 
   function toggleLang() {
-    const next = i18n.language === 'zh' ? 'en' : 'zh';
+    const next = i18n.language.startsWith('zh') ? 'en' : 'zh';
     i18n.changeLanguage(next);
   }
 
@@ -32,7 +32,7 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
           <div style={rowStyle}>
             <span style={labelStyle}>{t('settings.currentLanguage')}</span>
             <button onClick={toggleLang} style={btnStyle}>
-              {i18n.language === 'zh' ? t('layout.langEn') : t('layout.langZh')}
+              {i18n.language.startsWith('zh') ? t('layout.langEn') : t('layout.langZh')}
             </button>
           </div>
         </div>
