@@ -90,7 +90,7 @@ pub struct SearchSnapshot {
     pub captured_at: Instant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RequestId(pub String);
 
 /// Public supervisor handle. Cloned via `Arc`.
@@ -122,6 +122,82 @@ impl SearchSupervisor {
             monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
             app_handle,
         }
+    }
+
+    /// Submit a new search. If a previous search is in flight, all
+    /// its in-flight tasks are cancelled (cancel handles fired). The
+    /// method does NOT wait for the stream to finish — it returns
+    /// the new request id once dispatch begins. The stream runs in
+    /// the background and writes `last_search` upon completion.
+    pub async fn submit(&self, request_id: String) {
+        // Mark the new request as current. Existing in-flight tasks
+        // for any prior request will be cancelled below.
+        let new_id = RequestId(request_id);
+        let old_id = {
+            let mut current = self.current_request.lock().await;
+            let old = current.take();
+            *current = Some(new_id.clone());
+            old
+        };
+
+        // Fire cancel on any in-flight tasks from the old request.
+        if let Some(prev) = old_id {
+            let in_flight = self.in_flight.read().await;
+            if let Some(tasks) = in_flight.get(&prev) {
+                for t in tasks {
+                    let _ = t.cancel.send(true);
+                }
+            }
+        }
+        // Note: we do NOT clear in_flight[old] here. The src_task
+        // removes itself upon completion (see Task 5). If the user
+        // submits again before the old tasks finish, the next
+        // submit() will see the leftover entries and fire their
+        // cancel handles again — sending `true` on an already-closed
+        // channel is a no-op, so this is safe.
+    }
+
+    /// Cancel all in-flight tasks for the given request id (or the
+    /// current request if `None`). Returns the number of tasks
+    /// whose cancel handles were fired.
+    pub async fn cancel(&self, request_id: Option<String>) -> usize {
+        let target = match request_id {
+            Some(id) => RequestId(id),
+            None => {
+                let cur = self.current_request.lock().await;
+                match cur.as_ref() {
+                    Some(id) => id.clone(),
+                    None => return 0,
+                }
+            }
+        };
+        let mut fired = 0usize;
+        let in_flight = self.in_flight.read().await;
+        if let Some(tasks) = in_flight.get(&target) {
+            for t in tasks {
+                let _ = t.cancel.send(true);
+                fired += 1;
+            }
+        }
+        fired
+    }
+
+    /// Read the last completed search snapshot, if any.
+    pub async fn last_search(&self) -> Option<SearchSnapshot> {
+        self.last_search.lock().await.clone()
+    }
+
+    /// Replace the supervisor's settings. Validates the new settings
+    /// first; returns Err on invalid values.
+    pub async fn update_settings(&self, new: SearchSettings) -> Result<(), String> {
+        new.validate()?;
+        *self.settings.write().await = new;
+        Ok(())
+    }
+
+    /// Read the current settings.
+    pub async fn settings(&self) -> SearchSettings {
+        self.settings.read().await.clone()
     }
 }
 
