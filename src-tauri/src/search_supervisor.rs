@@ -124,3 +124,67 @@ impl SearchSupervisor {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_default_is_valid() {
+        assert!(SearchSettings::default().validate().is_ok());
+    }
+
+    #[test]
+    fn settings_reject_zero_concurrency() {
+        let mut s = SearchSettings::default();
+        s.max_concurrency = 0;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn settings_reject_high_concurrency() {
+        let mut s = SearchSettings::default();
+        s.max_concurrency = 65;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn settings_reject_low_memory_limit() {
+        let mut s = SearchSettings::default();
+        s.memory_soft_limit_mb = 49;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn settings_reject_high_memory_limit() {
+        let mut s = SearchSettings::default();
+        s.memory_soft_limit_mb = 5000;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn settings_reject_low_timeout() {
+        let mut s = SearchSettings::default();
+        s.per_source_timeout_ms = 100;
+        assert!(s.validate().is_err());
+    }
+
+    #[test]
+    fn settings_accept_boundary_values() {
+        let s = SearchSettings {
+            max_concurrency: 1,
+            memory_soft_limit_mb: 50,
+            per_source_timeout_ms: 500,
+            reclaim_batch: 1,
+        };
+        assert!(s.validate().is_ok());
+
+        let s = SearchSettings {
+            max_concurrency: 64,
+            memory_soft_limit_mb: 4096,
+            per_source_timeout_ms: 60000,
+            reclaim_batch: 16,
+        };
+        assert!(s.validate().is_ok());
+    }
+}
