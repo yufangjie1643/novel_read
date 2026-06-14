@@ -103,7 +103,10 @@ pub struct SearchSupervisor {
     /// Tracks the latest resources monitor task so we can abort it on
     /// drop or supervisor replacement. Only one monitor at a time.
     pub(crate) monitor_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
-    pub(crate) app_handle: tauri::AppHandle,
+    /// App handle, kept for future use (e.g. emitting events from the
+    /// resource monitor). `None` in tests where constructing a real
+    /// AppHandle is impractical.
+    pub(crate) app_handle: Option<tauri::AppHandle>,
 }
 
 impl SearchSupervisor {
@@ -120,7 +123,7 @@ impl SearchSupervisor {
             settings: Arc::new(RwLock::new(defaults)),
             current_request: Arc::new(tokio::sync::Mutex::new(None)),
             monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
-            app_handle,
+            app_handle: Some(app_handle),
         }
     }
 
@@ -199,6 +202,23 @@ impl SearchSupervisor {
     pub async fn settings(&self) -> SearchSettings {
         self.settings.read().await.clone()
     }
+
+    /// Test-only constructor that doesn't require a real Tauri app
+    /// handle. Used by the unit tests in this module.
+    #[cfg(test)]
+    pub fn new_for_tests() -> Self {
+        let defaults = SearchSettings::default();
+        let sem = Arc::new(Semaphore::new(defaults.max_concurrency));
+        Self {
+            sem,
+            in_flight: Arc::new(RwLock::new(HashMap::new())),
+            last_search: Arc::new(tokio::sync::Mutex::new(None)),
+            settings: Arc::new(RwLock::new(defaults)),
+            current_request: Arc::new(tokio::sync::Mutex::new(None)),
+            monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
+            app_handle: None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -262,5 +282,106 @@ mod tests {
             reclaim_batch: 16,
         };
         assert!(s.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn submit_sets_current_request() {
+        let sup = SearchSupervisor::new_for_tests();
+        sup.submit("req-1".to_string()).await;
+        let cur = sup.current_request.lock().await;
+        assert_eq!(cur.as_ref().map(|r| r.0.clone()), Some("req-1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn second_submit_replaces_current_request() {
+        let sup = SearchSupervisor::new_for_tests();
+        sup.submit("req-1".to_string()).await;
+        sup.submit("req-2".to_string()).await;
+        let cur = sup.current_request.lock().await;
+        assert_eq!(cur.as_ref().map(|r| r.0.clone()), Some("req-2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn cancel_returns_zero_when_no_current_request() {
+        let sup = SearchSupervisor::new_for_tests();
+        let n = sup.cancel(None).await;
+        assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn cancel_fires_handle_for_in_flight_task() {
+        let sup = SearchSupervisor::new_for_tests();
+        sup.submit("req-1".to_string()).await;
+        // Manually insert an in-flight task with a watch channel.
+        let (tx, mut rx) = tokio::sync::watch::channel(false);
+        let task = InFlightTask {
+            source_url: "u".to_string(),
+            source_name: "n".to_string(),
+            health_score: 1.0,
+            started_at: Instant::now(),
+            cancel: tx,
+        };
+        {
+            let mut map = sup.in_flight.write().await;
+            map.entry(RequestId("req-1".to_string()))
+                .or_default()
+                .push(task);
+        }
+        let n = sup.cancel(Some("req-1".to_string())).await;
+        assert_eq!(n, 1);
+        rx.changed().await.unwrap();
+        assert!(*rx.borrow());
+    }
+
+    #[tokio::test]
+    async fn cancel_does_not_touch_other_requests() {
+        let sup = SearchSupervisor::new_for_tests();
+        let (tx_a, mut rx_a) = tokio::sync::watch::channel(false);
+        let (tx_b, _rx_b) = tokio::sync::watch::channel(false);
+        {
+            let mut map = sup.in_flight.write().await;
+            map.entry(RequestId("req-a".to_string()))
+                .or_default()
+                .push(InFlightTask {
+                    source_url: "a".into(),
+                    source_name: "na".into(),
+                    health_score: 1.0,
+                    started_at: Instant::now(),
+                    cancel: tx_a,
+                });
+            map.entry(RequestId("req-b".to_string()))
+                .or_default()
+                .push(InFlightTask {
+                    source_url: "b".into(),
+                    source_name: "nb".into(),
+                    health_score: 1.0,
+                    started_at: Instant::now(),
+                    cancel: tx_b,
+                });
+        }
+        let n = sup.cancel(Some("req-a".to_string())).await;
+        assert_eq!(n, 1);
+        rx_a.changed().await.unwrap();
+        assert!(*rx_a.borrow());
+        // rx_b untouched
+    }
+
+    #[tokio::test]
+    async fn update_settings_writes_and_validates() {
+        let sup = SearchSupervisor::new_for_tests();
+        let mut new = SearchSettings::default();
+        new.max_concurrency = 4;
+        sup.update_settings(new.clone()).await.unwrap();
+        assert_eq!(sup.settings().await.max_concurrency, 4);
+
+        let mut bad = SearchSettings::default();
+        bad.max_concurrency = 0;
+        assert!(sup.update_settings(bad).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn last_search_initially_none() {
+        let sup = SearchSupervisor::new_for_tests();
+        assert!(sup.last_search().await.is_none());
     }
 }
