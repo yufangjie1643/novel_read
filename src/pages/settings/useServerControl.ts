@@ -7,7 +7,10 @@ export function useServerControl() {
   const { t } = useTranslation();
   const [serverRunning, setServerRunning] = useState(false);
   const [serverUrl, setServerUrl] = useState('');
-  const [serverMessage, setServerMessage] = useState<{ text: string; kind: 'idle' | 'error' | 'info' }>({
+  const [serverMessage, setServerMessage] = useState<{
+    text: string;
+    kind: 'idle' | 'error' | 'info';
+  }>({
     text: '',
     kind: 'idle',
   });
@@ -45,13 +48,19 @@ export function useServerControl() {
           if (resp.success && resp.data) {
             setServerRunning(true);
             setServerUrl(resp.data);
-            setServerMessage({ text: t('bookshelf.serverStarted', { url: resp.data }), kind: 'info' });
+            setServerMessage({
+              text: t('bookshelf.serverStarted', { url: resp.data }),
+              kind: 'info',
+            });
           } else {
             const errMsg = resp.error || '';
             if (errMsg.includes('all ports in range are in use')) {
               setServerMessage({ text: t('bookshelf.serverPortInUse'), kind: 'error' });
             } else {
-              setServerMessage({ text: t('bookshelf.serverStartFailed', { error: errMsg }), kind: 'error' });
+              setServerMessage({
+                text: t('bookshelf.serverStartFailed', { error: errMsg }),
+                kind: 'error',
+              });
             }
           }
         } catch (e) {
