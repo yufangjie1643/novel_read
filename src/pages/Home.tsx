@@ -1,7 +1,9 @@
-import { useState, useEffect, useRef, useCallback, useTransition } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, useTransition } from 'react';
 import { invoke, Channel } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { isTauri } from '../utils/tauri';
 import type {
   ApiResponse,
   BookSource,
@@ -19,6 +21,7 @@ import SourceStatusStrip from '../components/search/SourceStatusStrip';
 import FailureFooter from '../components/search/FailureFooter';
 
 const ZERO_SCORE: ScoreBreakdown = {
+  allQueryPresent: 0,
   words: 0,
   typo: 0,
   proximity: 255,
@@ -58,7 +61,9 @@ function applyEvent(state: SearchState, event: SearchEvent, requestId: string): 
       return { ...active, statuses };
     }
     case 'Result': {
-      const bookWithScore = { ...event.book, _score: event.score } as SearchBook & { _score: ScoreBreakdown };
+      const bookWithScore = { ...event.book, _score: event.score } as SearchBook & {
+        _score: ScoreBreakdown;
+      };
       return { ...active, results: [...active.results, bookWithScore as SearchBook] };
     }
     case 'SourceFinished': {
@@ -94,7 +99,13 @@ function applyEvent(state: SearchState, event: SearchEvent, requestId: string): 
       return { ...active, statuses, failures: [...active.failures, failure] };
     }
     case 'Done': {
-      return { ...active, kind: 'done', totalResults: event.totalResults, durationMs: event.durationMs, requestId };
+      return {
+        ...active,
+        kind: 'done',
+        totalResults: event.totalResults,
+        durationMs: event.durationMs,
+        requestId,
+      };
     }
   }
 }
@@ -115,14 +126,17 @@ function ResultCard({
   book,
   isMobileUi,
   onClick,
+  t,
 }: {
   book: SearchBook;
   isMobileUi: boolean;
   onClick: () => void;
+  t: (key: string) => string;
 }) {
   // v1 of ResultCard: covers are eager; Task 7 will lazy-load.
   // isMobileUi is reserved for future card-level layout tweaks.
   void isMobileUi;
+  const tocUrl = book.toc_url || book.book_url;
   return (
     <div
       onClick={onClick}
@@ -203,8 +217,53 @@ function ResultCard({
             {book.intro}
           </div>
         )}
-        <div style={{ color: '#bbb', fontSize: 11, fontWeight: 500, marginTop: 4 }}>
-          {book.origin_name || 'unknown'}
+        <div
+          style={{
+            color: '#bbb',
+            fontSize: 11,
+            fontWeight: 500,
+            marginTop: 4,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>{book.origin_name || 'unknown'}</span>
+          {tocUrl && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isTauri()) {
+                  void openUrl(tocUrl).catch((err) => console.error('openUrl failed:', err));
+                } else {
+                  window.open(tocUrl, '_blank', 'noopener');
+                }
+              }}
+              title={tocUrl}
+              aria-label={t('bookDetail.openOriginal')}
+              style={{
+                padding: '2px 8px',
+                background: 'transparent',
+                color: '#888',
+                border: '1px solid transparent',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 11,
+                lineHeight: 1,
+                transition: 'all 0.15s',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = '#1976d2';
+                e.currentTarget.style.borderColor = '#bbdefb';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = '#888';
+                e.currentTarget.style.borderColor = 'transparent';
+              }}
+            >
+              ↗ {t('bookDetail.openOriginal')}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -291,7 +350,12 @@ export default function Home() {
       } else if (e.key === 'ArrowUp' && activeResults.length > 0) {
         e.preventDefault();
         setSelectedIndex((i) => Math.max(i - 1, 0));
-      } else if (e.key === 'Enter' && !inField && selectedIndex >= 0 && activeResults[selectedIndex]) {
+      } else if (
+        e.key === 'Enter' &&
+        !inField &&
+        selectedIndex >= 0 &&
+        activeResults[selectedIndex]
+      ) {
         e.preventDefault();
         openBook(activeResults[selectedIndex], sources, navigate);
       } else if (e.key === 'Escape') {
@@ -323,6 +387,7 @@ export default function Home() {
   useEffect(() => {
     void loadSources();
     void loadSearchHistory();
+    void loadLastSearch();
   }, []);
 
   async function loadSources() {
@@ -342,6 +407,40 @@ export default function Home() {
       console.error('Failed to load history:', e);
     }
   }
+
+  async function loadLastSearch() {
+    try {
+      const resp = await invoke<
+        ApiResponse<{
+          request_id: string;
+          query: string;
+          results: SearchBook[];
+          total_results: number;
+          duration_ms: number;
+        } | null>
+      >('get_last_search');
+      // Only restore the query so the user sees context from the
+      // previous session. Full result replay would require the same
+      // shape as the streaming state's results/statuses/failures,
+      // which the v1 snapshot intentionally omits.
+      if (resp.success && resp.data && resp.data.query) {
+        setSearchKey(resp.data.query);
+      }
+    } catch (e) {
+      console.error('Failed to load last search:', e);
+    }
+  }
+
+  const cancelSearch = useCallback(async () => {
+    if (currentRequestIdRef.current == null) return;
+    try {
+      await invoke<number>('cancel_search', {
+        requestId: currentRequestIdRef.current,
+      });
+    } catch (e) {
+      console.error('cancel_search failed:', e);
+    }
+  }, []);
 
   async function clearHistory() {
     try {
@@ -397,7 +496,7 @@ export default function Home() {
       };
 
       try {
-        await invoke('search_books_stream', {
+        await invoke('search_books_stream_v2', {
           query: trimmed,
           sources: enabled,
           channel,
@@ -411,15 +510,6 @@ export default function Home() {
     [sources, t]
   );
 
-  // Debounce 450ms
-  useEffect(() => {
-    const id = setTimeout(() => {
-      if (searchKey.trim()) void handleSearch(searchKey);
-    }, 450);
-    return () => clearTimeout(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchKey]);
-
   const sortedResults: SearchBook[] = (() => {
     if (state.kind === 'streaming' || state.kind === 'stalled' || state.kind === 'done') {
       return [...state.results].sort((a, b) => {
@@ -430,6 +520,37 @@ export default function Home() {
     }
     return [];
   })();
+
+  // When the user has not opted in to seeing unrelated results, drop
+  // any result whose every unique query char does not appear in the
+  // title (allQueryPresent == 0). This is the "completely unrelated"
+  // signal — partial / substring matches (e.g. "霸体" matching
+  // query "三体") are still shown.
+  const [showIrrelevant, setShowIrrelevant] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('search.showIrrelevant') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('search.showIrrelevant', showIrrelevant ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [showIrrelevant]);
+  const relevantResults = useMemo(
+    () =>
+      showIrrelevant
+        ? sortedResults
+        : sortedResults.filter((b) => {
+            const score = (b as SearchBook & { _score?: ScoreBreakdown })._score;
+            return score ? score.allQueryPresent === 1 : true;
+          }),
+    [sortedResults, showIrrelevant]
+  );
+  const hiddenCount = sortedResults.length - relevantResults.length;
 
   const sourceStatusList: SourceStatus[] = (() => {
     if (state.kind === 'streaming' || state.kind === 'stalled' || state.kind === 'done') {
@@ -486,6 +607,20 @@ export default function Home() {
               ? t('common.loading')
               : t('common.search')}
           </button>
+          {(state.kind === 'streaming' || state.kind === 'stalled') && (
+            <button
+              onClick={() => void cancelSearch()}
+              style={{
+                ...btnPrimary,
+                background: '#fff',
+                color: '#f44336',
+                border: '1px solid #ffcdd2',
+                ...(isMobileUi ? { width: '100%', minHeight: 44 } : {}),
+              }}
+            >
+              ⏹ {t('home.cancel')}
+            </button>
+          )}
         </div>
 
         {searchHistory.length > 0 && (
@@ -498,7 +633,9 @@ export default function Home() {
               alignItems: 'center',
             }}
           >
-            <span style={{ fontSize: 13, color: '#888', fontWeight: 500 }}>{t('home.history')}</span>
+            <span style={{ fontSize: 13, color: '#888', fontWeight: 500 }}>
+              {t('home.history')}
+            </span>
             {searchHistory.map((item) => (
               <button
                 key={item.id || item.keyword}
@@ -519,9 +656,7 @@ export default function Home() {
       </section>
 
       {/* Source status strip (only when searching) */}
-      {sourceStatusList.length > 0 && (
-        <SourceStatusStrip statuses={sourceStatusList} />
-      )}
+      {sourceStatusList.length > 0 && <SourceStatusStrip statuses={sourceStatusList} />}
 
       {/* Error message */}
       {state.kind === 'error' && (
@@ -544,16 +679,50 @@ export default function Home() {
       {sortedResults.length > 0 && (
         <section style={{ marginBottom: 24 }}>
           <h2
-            style={{ fontSize: 18, fontWeight: 700, color: '#1a1a2e', marginBottom: 16 }}
+            style={{
+              fontSize: 18,
+              fontWeight: 700,
+              color: '#1a1a2e',
+              marginBottom: 16,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
           >
-            {t('home.resultsCount', { count: sortedResults.length })}
+            <span>
+              {t('home.resultsCount', { count: relevantResults.length })}
+              {hiddenCount > 0 && (
+                <span style={{ color: '#999', fontWeight: 400, fontSize: 14, marginLeft: 8 }}>
+                  {t('home.filteredOut', { count: hiddenCount })}
+                </span>
+              )}
+            </span>
+            <button
+              onClick={() => setShowIrrelevant((v) => !v)}
+              title={showIrrelevant ? t('home.hideIrrelevantHint') : t('home.showIrrelevantHint')}
+              style={{
+                padding: '4px 10px',
+                background: showIrrelevant ? '#1976d2' : '#fff',
+                color: showIrrelevant ? '#fff' : '#555',
+                border: `1px solid ${showIrrelevant ? '#1976d2' : '#d0d0d0'}`,
+                borderRadius: 6,
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 500,
+                transition: 'all 0.15s',
+              }}
+            >
+              {showIrrelevant ? t('home.hideIrrelevant') : t('home.showIrrelevant')}
+            </button>
           </h2>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {sortedResults.map((book) => (
+            {relevantResults.map((book) => (
               <ResultCard
                 key={book.book_url}
                 book={book}
                 isMobileUi={isMobileUi}
+                t={t}
                 onClick={() => openBook(book, sources, navigate)}
               />
             ))}
@@ -562,14 +731,14 @@ export default function Home() {
       )}
 
       {/* Failure footer */}
-      {failureList.length > 0 && (
-        <FailureFooter failures={failureList} onRetryAll={retryAll} />
-      )}
+      {failureList.length > 0 && <FailureFooter failures={failureList} onRetryAll={retryAll} />}
 
       {/* Status: idle hint */}
       {state.kind === 'idle' && sources.length > 0 && (
         <p style={{ color: '#888', fontSize: 13, marginTop: 24 }}>
-          {t('home.sourcesCount', { count: sources.filter((s) => s.enabled && s.search_url).length })}
+          {t('home.sourcesCount', {
+            count: sources.filter((s) => s.enabled && s.search_url).length,
+          })}
         </p>
       )}
     </div>
