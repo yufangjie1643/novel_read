@@ -369,6 +369,34 @@ function installTauriMock(page, uiMode) {
           case 'clear_search_keywords':
             state.searchKeywords = [];
             return ok(null);
+          case 'get_enabled_book_sources':
+            return ok(state.sources.filter((s) => s.enabled !== false));
+          case 'get_explore_kinds':
+            return ok([{ title: '热门', url: 'mock://explore/hot' }]);
+          case 'get_explore_items':
+            return ok({
+              items: [
+                {
+                  id: 'mock-explore-1',
+                  source_url: 'mock-source',
+                  source_name: '测试书源',
+                  label: '热门',
+                  url: 'mock://explore/hot',
+                },
+              ],
+              total: 1,
+              hasMore: false,
+            });
+          case 'search_books_stream':
+          case 'search_books_stream_v2':
+            // No-op for smoke test: results stream is not consumed.
+            return ok(null);
+          case 'cancel_search':
+            return ok(0);
+          case 'get_last_search':
+            return ok(null);
+          case 'update_search_settings':
+            return ok(null);
           case 'get_rule_subs':
             return ok([...state.ruleSubs]);
           case 'add_rule_sub':
