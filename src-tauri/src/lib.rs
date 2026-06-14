@@ -10,6 +10,7 @@ pub mod state;
 pub mod webdav;
 
 use commands::*;
+use std::sync::Arc;
 use tauri::Manager;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::{LogicalSize, Size};
@@ -21,7 +22,15 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let app_state = db::init_app_state(app.handle())?;
+            // Build the search supervisor and start its resource
+            // monitor before constructing AppState (the supervisor
+            // is owned by AppState).
+            let app_handle = app.handle().clone();
+            let supervisor = Arc::new(
+                crate::search_supervisor::SearchSupervisor::new(app_handle),
+            );
+            supervisor.start_monitor();
+            let app_state = db::init_app_state(app.handle(), supervisor)?;
             app.manage(app_state);
             apply_preview_window_size(app);
             Ok(())
@@ -174,6 +183,11 @@ pub fn run() {
             test_webdav_connection,
             backup_to_webdav,
             restore_from_webdav,
+            // Search supervisor commands
+            search_books_stream_v2,
+            cancel_search,
+            get_last_search,
+            update_search_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

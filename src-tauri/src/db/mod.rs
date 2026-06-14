@@ -20,7 +20,7 @@ pub use dao::{
     ServerDao, TxtTocRuleDao,
 };
 pub use models::{BookSource, BookSourceSummary, RssSource, RuleSub};
-pub use source_stats_dao::{compute_health, HealthInputs, SourceStats, SourceStatsDao};
+pub use source_stats_dao::{compute_health, HealthInputs, OpKind, SourceStats, SourceStatsDao};
 
 /// Pool size used for the shared `deadpool-sqlite` connection pool.
 /// 8 is comfortable for desktop with the Tauri IPC runtime; tune later if
@@ -197,6 +197,7 @@ pub fn check_pending_restore(app_dir: &PathBuf) -> Result<(), Box<dyn std::error
 /// handlers to use.
 pub fn init_app_state(
     app_handle: &tauri::AppHandle,
+    supervisor: std::sync::Arc<crate::search_supervisor::SearchSupervisor>,
 ) -> Result<crate::state::AppState, Box<dyn std::error::Error>> {
     let app_dir = app_handle.path().app_data_dir()?;
     std::fs::create_dir_all(&app_dir)?;
@@ -211,5 +212,9 @@ pub fn init_app_state(
     seed::seed_defaults(&seed_conn)?;
 
     let source_stats = std::sync::Arc::new(crate::db::SourceStatsDao::new(pool.clone()));
-    Ok(crate::state::AppState::build(pool, source_stats))
+    Ok(crate::state::AppState::build(
+        pool,
+        source_stats,
+        supervisor,
+    ))
 }
