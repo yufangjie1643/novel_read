@@ -2,7 +2,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
-import type { ApiResponse, BookSource, RssSource, RssArticle, RssStar, RuleSub, SourceLink } from '../types';
+import type {
+  ApiResponse,
+  BookSource,
+  RssSource,
+  RssArticle,
+  RssStar,
+  RuleSub,
+  SourceLink,
+} from '../types';
 import { useUiMode } from '../uiMode';
 
 const desktopCardStyle: CSSProperties = {
@@ -21,6 +29,306 @@ const desktopInputStyle: CSSProperties = {
   outline: 'none',
   fontFamily: 'inherit',
   marginBottom: 8,
+};
+
+const mobileArticlePageStyle: CSSProperties = {
+  padding: '0 16px 24px',
+};
+
+const mobileTitlebarStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '8px 0 12px',
+};
+
+const mobileTitlebarCompactStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '8px 0 12px',
+};
+
+const mobileBackButtonStyle: CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  fontSize: 28,
+  lineHeight: 1,
+  padding: '4px 8px',
+  cursor: 'pointer',
+  color: '#243447',
+};
+
+const mobileActionButtonStyle: CSSProperties = {
+  width: 36,
+  height: 36,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 8,
+  cursor: 'pointer',
+  padding: 0,
+  fontSize: 18,
+  color: '#243447',
+};
+
+const mobileActionButtonActiveStyle: CSSProperties = {
+  ...mobileActionButtonStyle,
+  background: '#243447',
+  color: '#fff',
+};
+
+const mobileTitleRowStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+};
+
+const mobileTitleActionsStyle: CSSProperties = {
+  display: 'flex',
+  gap: 4,
+};
+
+const mobileSearchStyle: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  background: '#fff',
+  border: '1px solid #dce5df',
+  borderRadius: 10,
+  padding: '8px 12px',
+  marginTop: 4,
+};
+
+const mobileSearchIconStyle: CSSProperties = {
+  width: 18,
+  height: 18,
+  flexShrink: 0,
+};
+
+const mobileSearchInputStyle: CSSProperties = {
+  flex: 1,
+  border: 'none',
+  outline: 'none',
+  fontSize: 14,
+  background: 'transparent',
+  fontFamily: 'inherit',
+  color: '#243447',
+};
+
+const mobileFilterRowStyle: CSSProperties = {
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: 8,
+  padding: '8px 0 12px',
+};
+
+const mobileFilterButtonBase: CSSProperties = {
+  padding: '6px 12px',
+  borderRadius: 16,
+  border: '1px solid #dce5df',
+  background: '#fff',
+  color: '#54715e',
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: 'pointer',
+};
+
+const mobileFilterButtonActiveStyle: CSSProperties = {
+  ...mobileFilterButtonBase,
+  background: '#54715e',
+  color: '#fff',
+  borderColor: '#54715e',
+};
+
+const mobileAddCardStyle: CSSProperties = {
+  background: '#fff',
+  borderRadius: 12,
+  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+  padding: 16,
+  display: 'grid',
+  gap: 8,
+  marginBottom: 12,
+};
+
+const mobileAddFormStyle: CSSProperties = {
+  background: '#fff',
+  borderRadius: 12,
+  boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+  padding: 16,
+  display: 'grid',
+  gap: 8,
+  marginBottom: 12,
+};
+
+const mobileInputStyle: CSSProperties = {
+  width: '100%',
+  padding: '8px 12px',
+  borderRadius: 8,
+  border: '1px solid #e0e0e0',
+  fontSize: 14,
+  outline: 'none',
+  fontFamily: 'inherit',
+};
+
+const mobilePrimaryButtonStyle: CSSProperties = {
+  padding: '8px 16px',
+  borderRadius: 8,
+  border: 'none',
+  background: '#54715e',
+  color: '#fff',
+  fontSize: 14,
+  fontWeight: 700,
+  cursor: 'pointer',
+};
+
+const mobileStarsStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+};
+
+const mobileStarRowStyle: CSSProperties = {
+  background: '#fff',
+  borderRadius: 10,
+  padding: '12px 14px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+};
+
+const mobileRuleSubInfoStyle: CSSProperties = {
+  display: 'grid',
+  gap: 2,
+  minWidth: 0,
+  flex: 1,
+};
+
+const mobileRuleSubUrlStyle: CSSProperties = {
+  fontSize: 12,
+  color: '#7f8983',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+};
+
+const mobileDeleteButtonStyle: CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  color: '#b33',
+  fontSize: 22,
+  lineHeight: 1,
+  cursor: 'pointer',
+  padding: '4px 8px',
+};
+
+const mobileGridWrapStyle: CSSProperties = {
+  padding: '4px 0 16px',
+};
+
+const mobileGridStyle: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, 1fr)',
+  gap: 12,
+};
+
+const mobileGridItemStyle: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  padding: 12,
+  background: '#fff',
+  border: 'none',
+  borderRadius: 8,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  textAlign: 'center',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+};
+
+const mobileIconWrapStyle: CSSProperties = {
+  width: 64,
+  height: 64,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  background: '#edf2ed',
+  borderRadius: 8,
+  overflow: 'hidden',
+};
+
+const mobileGridNameStyle: CSSProperties = {
+  marginTop: 8,
+  fontSize: 12,
+  color: '#1a1a2e',
+  textAlign: 'center',
+  wordBreak: 'break-word',
+};
+
+const mobileSheetBackdropStyle: CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0,0,0,0.5)',
+  zIndex: 100,
+  display: 'flex',
+  alignItems: 'flex-end',
+};
+
+const mobileSourceSheetStyle: CSSProperties = {
+  width: '100%',
+  background: '#fff',
+  borderTopLeftRadius: 16,
+  borderTopRightRadius: 16,
+  padding: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 12,
+};
+
+const mobileInlinePageStyle: CSSProperties = {
+  width: '100%',
+  height: 400,
+  border: 'none',
+  borderBottom: '1px solid #f0f0f0',
+  marginBottom: 12,
+};
+
+const mobileArticlesListStyle: CSSProperties = {
+  display: 'grid',
+  gap: 1,
+  background: '#f0f0f0',
+};
+
+const mobileArticleStyle: CSSProperties = {
+  background: '#fff',
+  padding: '14px 16px',
+  display: 'grid',
+  gap: 6,
+  cursor: 'pointer',
+};
+
+const mobileLinkPanelStyle: CSSProperties = {
+  padding: '0 0 12px',
+};
+
+const mobileSourceLinksStyle: CSSProperties = {
+  display: 'grid',
+  gap: 8,
+};
+
+const mobileSourceLinkStyle: CSSProperties = {
+  background: '#fff',
+  borderRadius: 10,
+  padding: '12px 14px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
 };
 
 function isValidUrl(value: string) {
@@ -495,10 +803,7 @@ export default function RssPage() {
   function renderSourceLinks() {
     if (!selectedSource?.single_url) return null;
     return (
-      <div
-        className={isMobileUi ? 'android-rss-link-panel' : undefined}
-        style={isMobileUi ? undefined : { padding: '16px 20px' }}
-      >
+      <div style={isMobileUi ? mobileLinkPanelStyle : { padding: '16px 20px' }}>
         <div className="rss-link-head">
           <h4>{t('rss.installableSources')}</h4>
           <button
@@ -510,11 +815,11 @@ export default function RssPage() {
           </button>
         </div>
         {sourceLinks.length > 0 ? (
-          <div className={isMobileUi ? 'android-rss-source-links' : 'rss-source-links'}>
+          <div style={isMobileUi ? mobileSourceLinksStyle : undefined}>
             {sourceLinks.map((link, idx) => (
               <div
                 key={`${link.source_url}-${idx}`}
-                className={isMobileUi ? 'android-rss-source-link' : 'rss-source-link'}
+                style={isMobileUi ? mobileSourceLinkStyle : undefined}
               >
                 <div>
                   <strong title={link.label || link.source_url}>
@@ -545,17 +850,16 @@ export default function RssPage() {
     }
 
     return (
-      <div className={mobile ? 'android-rss-articles' : undefined}>
+      <div style={mobile ? mobileArticlesListStyle : undefined}>
         {articles.map((article, index) => {
           const isRead = article.id != null && readArticleIds.has(article.id);
           return (
             <article
               key={articleKey(article, index)}
-              className={mobile ? `android-rss-article${isRead ? ' read' : ''}` : undefined}
               onClick={() => markAsRead(article)}
               style={
                 mobile
-                  ? undefined
+                  ? { ...mobileArticleStyle, background: isRead ? '#fafbfc' : '#fff' }
                   : {
                       padding: '14px 20px',
                       borderBottom: '1px solid #f8f8f8',
@@ -627,11 +931,11 @@ export default function RssPage() {
   if (isMobileUi) {
     if (selectedSource) {
       return (
-        <div className="android-screen android-rss-page android-rss-article-page">
-          <header className="android-rss-titlebar compact">
+        <div className="android-screen" style={mobileArticlePageStyle}>
+          <header style={mobileTitlebarCompactStyle}>
             <button
               type="button"
-              className="android-rss-back-button"
+              style={mobileBackButtonStyle}
               aria-label={t('common.back')}
               onClick={() => {
                 setSelectedSource(null);
@@ -644,9 +948,10 @@ export default function RssPage() {
               ‹
             </button>
             <h1>{selectedSource.source_name}</h1>
-            <div className="android-rss-title-actions">
+            <div style={mobileTitleActionsStyle}>
               <button
                 type="button"
+                style={mobileActionButtonStyle}
                 aria-label={t('rss.refresh')}
                 onClick={fetchArticles}
                 disabled={fetching || loading}
@@ -671,7 +976,7 @@ export default function RssPage() {
               {iframeHtml && (
                 <iframe
                   srcDoc={iframeHtml}
-                  className="android-rss-inline-page"
+                  style={mobileInlinePageStyle}
                   title={selectedSource.source_name}
                   sandbox="allow-same-origin"
                 />
@@ -687,15 +992,15 @@ export default function RssPage() {
     }
 
     return (
-      <div className="android-screen android-rss-page">
-        <header className="android-rss-titlebar">
-          <div className="android-rss-title-row">
+      <div className="android-screen">
+        <header style={mobileTitlebarStyle}>
+          <div style={mobileTitleRowStyle}>
             <h1>{t('layout.subscription', { defaultValue: t('layout.rss') })}</h1>
-            <div className="android-rss-title-actions">
+            <div style={mobileTitleActionsStyle}>
               <button
                 type="button"
                 aria-label={t('rss.favorites')}
-                className={mobileStarsOpen ? 'active' : undefined}
+                style={mobileStarsOpen ? mobileActionButtonActiveStyle : mobileActionButtonStyle}
                 onClick={openMobileStars}
               >
                 <span aria-hidden="true">☆</span>
@@ -703,7 +1008,7 @@ export default function RssPage() {
               <button
                 type="button"
                 aria-label={t('rss.groupFilter')}
-                className={mobileGroupsOpen ? 'active' : undefined}
+                style={mobileGroupsOpen ? mobileActionButtonActiveStyle : mobileActionButtonStyle}
                 onClick={() => {
                   setMobileGroupsOpen((open) => !open);
                   setMobileStarsOpen(false);
@@ -714,7 +1019,7 @@ export default function RssPage() {
               <button
                 type="button"
                 aria-label={t('rss.manageSources')}
-                className={mobileAddOpen ? 'active' : undefined}
+                style={mobileAddOpen ? mobileActionButtonActiveStyle : mobileActionButtonStyle}
                 onClick={() => {
                   setMobileAddOpen((open) => !open);
                   setMobileStarsOpen(false);
@@ -725,7 +1030,7 @@ export default function RssPage() {
               <button
                 type="button"
                 aria-label={t('rss.ruleSubscription')}
-                className={ruleSubsOpen ? 'active' : undefined}
+                style={ruleSubsOpen ? mobileActionButtonActiveStyle : mobileActionButtonStyle}
                 onClick={() => {
                   setRuleSubsOpen((open) => !open);
                   if (!ruleSubsOpen) {
@@ -741,8 +1046,8 @@ export default function RssPage() {
             </div>
           </div>
 
-          <label className="android-rss-search">
-            <img src="/mobile-media/search.svg" alt="" />
+          <label style={mobileSearchStyle}>
+            <img src="/mobile-media/search.svg" alt="" style={mobileSearchIconStyle} />
             <input
               type="search"
               placeholder={t('common.search')}
@@ -751,15 +1056,16 @@ export default function RssPage() {
                 setMobileSearchQuery(e.target.value);
                 setMobileStarsOpen(false);
               }}
+              style={mobileSearchInputStyle}
             />
           </label>
         </header>
 
         {mobileGroupsOpen && (
-          <div className="android-rss-filter-row">
+          <div style={mobileFilterRowStyle}>
             <button
               type="button"
-              className={mobileGroupFilter ? undefined : 'active'}
+              style={mobileGroupFilter ? mobileFilterButtonBase : mobileFilterButtonActiveStyle}
               onClick={() => setMobileGroupFilter('')}
             >
               {t('common.all')}
@@ -768,7 +1074,11 @@ export default function RssPage() {
               <button
                 key={group}
                 type="button"
-                className={mobileGroupFilter === group ? 'active' : undefined}
+                style={
+                  mobileGroupFilter === group
+                    ? mobileFilterButtonActiveStyle
+                    : mobileFilterButtonBase
+                }
                 onClick={() => setMobileGroupFilter(group)}
               >
                 {group}
@@ -778,20 +1088,30 @@ export default function RssPage() {
         )}
 
         {mobileAddOpen && (
-          <section className="android-rss-add-card">
+          <section style={mobileAddCardStyle}>
             <input
               type="text"
               placeholder={t('rss.sourceNamePlaceholder')}
               value={newSourceName}
               onChange={(e) => setNewSourceName(e.target.value)}
+              style={mobileInputStyle}
             />
             <input
               type="text"
               placeholder={t('rss.sourceUrlPlaceholder')}
               value={newSourceUrl}
               onChange={(e) => setNewSourceUrl(e.target.value)}
+              style={mobileInputStyle}
             />
-            <label>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontSize: 14,
+                color: '#243447',
+              }}
+            >
               <input
                 type="checkbox"
                 checked={newSourceSingleUrl}
@@ -799,7 +1119,7 @@ export default function RssPage() {
               />
               <span>{t('rss.singleUrlSource')}</span>
             </label>
-            <button type="button" onClick={addSource}>
+            <button type="button" onClick={addSource} style={mobilePrimaryButtonStyle}>
               {t('rss.addSource')}
             </button>
           </section>
@@ -812,7 +1132,7 @@ export default function RssPage() {
         )}
 
         {mobileStarsOpen ? (
-          <section className="android-rss-stars">
+          <section style={mobileStarsStyle}>
             {rssStars.length === 0 ? (
               <div className="android-empty-panel">
                 <p>{t('rss.noFavorites')}</p>
@@ -821,7 +1141,7 @@ export default function RssPage() {
               rssStars.map((star) => (
                 <div
                   key={`${star.origin}-${star.title}-${star.id ?? ''}`}
-                  className="android-rss-star-row"
+                  style={mobileStarRowStyle}
                 >
                   <strong>{star.title}</strong>
                   <span>{star.sort || star.origin}</span>
@@ -830,23 +1150,25 @@ export default function RssPage() {
             )}
           </section>
         ) : ruleSubsOpen ? (
-          <section className="android-rss-stars">
-            <div className="android-rss-add-form">
+          <section style={mobileStarsStyle}>
+            <div style={mobileAddFormStyle}>
               <input
                 type="text"
                 placeholder={t('rss.ruleSubNamePlaceholder')}
                 value={newRuleSubName}
                 onChange={(e) => setNewRuleSubName(e.target.value)}
+                style={mobileInputStyle}
               />
               <input
                 type="url"
                 placeholder={t('rss.ruleSubUrlPlaceholder')}
                 value={newRuleSubUrl}
                 onChange={(e) => setNewRuleSubUrl(e.target.value)}
+                style={mobileInputStyle}
               />
               <button
                 type="button"
-                className="android-rss-add-button"
+                style={mobilePrimaryButtonStyle}
                 onClick={addRuleSub}
                 disabled={ruleSubsLoading}
               >
@@ -863,17 +1185,14 @@ export default function RssPage() {
               </div>
             ) : (
               ruleSubs.map((sub) => (
-                <div
-                  key={sub.id ?? sub.url ?? sub.name ?? 'sub'}
-                  className="android-rss-star-row"
-                >
-                  <div className="android-rss-rule-sub-info">
+                <div key={sub.id ?? sub.url ?? sub.name ?? 'sub'} style={mobileStarRowStyle}>
+                  <div style={mobileRuleSubInfoStyle}>
                     <strong>{sub.name || sub.url}</strong>
-                    {sub.url && sub.name && <span className="android-rss-rule-sub-url">{sub.url}</span>}
+                    {sub.url && sub.name && <span style={mobileRuleSubUrlStyle}>{sub.url}</span>}
                   </div>
                   <button
                     type="button"
-                    className="android-rss-row-delete"
+                    style={mobileDeleteButtonStyle}
                     aria-label={t('common.delete')}
                     onClick={() => sub.id != null && deleteRuleSub(sub.id)}
                   >
@@ -884,11 +1203,11 @@ export default function RssPage() {
             )}
           </section>
         ) : (
-          <section className="android-rss-grid-wrap">
-            <div className="android-rss-grid">
+          <section style={mobileGridWrapStyle}>
+            <div style={mobileGridStyle}>
               <button
                 type="button"
-                className="android-rss-grid-item"
+                style={mobileGridItemStyle}
                 onClick={() => {
                   if (longPressTriggeredRef.current) {
                     longPressTriggeredRef.current = false;
@@ -898,17 +1217,21 @@ export default function RssPage() {
                   loadRuleSubs();
                 }}
               >
-                <span className="android-rss-icon-wrap legado">
-                  <img src="/mobile-media/app_icon.png" alt="" />
+                <span style={mobileIconWrapStyle}>
+                  <img
+                    src="/mobile-media/app_icon.png"
+                    alt=""
+                    style={{ maxWidth: '100%', maxHeight: '100%' }}
+                  />
                 </span>
-                <span className="android-rss-grid-name">{t('rss.ruleSubscription')}</span>
+                <span style={mobileGridNameStyle}>{t('rss.ruleSubscription')}</span>
               </button>
 
               {mobileSources.map((source) => (
                 <button
                   key={source.source_url}
                   type="button"
-                  className="android-rss-grid-item"
+                  style={mobileGridItemStyle}
                   onClick={() => {
                     if (longPressTriggeredRef.current) {
                       longPressTriggeredRef.current = false;
@@ -925,16 +1248,17 @@ export default function RssPage() {
                     openMobileSourceMenu(source);
                   }}
                 >
-                  <span className="android-rss-icon-wrap">
+                  <span style={mobileIconWrapStyle}>
                     <img
                       src={source.source_icon?.trim() || '/mobile-media/sub_line.svg'}
                       alt=""
+                      style={{ maxWidth: '100%', maxHeight: '100%' }}
                       onError={(e) => {
                         e.currentTarget.src = '/mobile-media/sub_line.svg';
                       }}
                     />
                   </span>
-                  <span className="android-rss-grid-name">{source.source_name}</span>
+                  <span style={mobileGridNameStyle}>{source.source_name}</span>
                 </button>
               ))}
             </div>
@@ -949,12 +1273,12 @@ export default function RssPage() {
 
         {mobileMenuSource && (
           <div
-            className="android-rss-sheet-backdrop"
+            style={mobileSheetBackdropStyle}
             role="presentation"
             onClick={() => setMobileMenuSource(null)}
           >
             <section
-              className="android-rss-source-sheet"
+              style={mobileSourceSheetStyle}
               role="dialog"
               aria-label={mobileMenuSource.source_name}
               onClick={(e) => e.stopPropagation()}
