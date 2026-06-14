@@ -34,7 +34,6 @@ export default function SettingsHome({ fontSize }: Props) {
       </div>
 
       <div className="android-settings-panel">
-        <h2>{t('settings.title')}</h2>
         <Link to="/book-sources">
           <img src="/mobile-media/my_center_book_icon.svg" alt="" />
           <span>{t('layout.bookSources')}</span>
@@ -49,17 +48,17 @@ export default function SettingsHome({ fontSize }: Props) {
 
       <div className="android-settings-panel">
         <h2>{t('settings.settingsNav')}</h2>
-        <Link to="/settings/reader">
-          <span>{t('settings.catTheme')}</span>
+        <Link to="/settings/reader" style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}>
+          <span style={{ whiteSpace: 'normal' }}>{t('settings.catTheme')}</span>
         </Link>
-        <Link to="/settings/backup">
-          <span>{t('settings.catBackup')}</span>
+        <Link to="/settings/backup" style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}>
+          <span style={{ whiteSpace: 'normal' }}>{t('settings.catBackup')}</span>
         </Link>
-        <Link to="/settings/bulk-import">
-          <span>{t('settings.catBulkImport')}</span>
+        <Link to="/settings/bulk-import" style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}>
+          <span style={{ whiteSpace: 'normal' }}>{t('settings.catBulkImport')}</span>
         </Link>
-        <Link to="/settings/other">
-          <span>{t('settings.catOther')}</span>
+        <Link to="/settings/other" style={{ gridTemplateColumns: 'minmax(0, 1fr)' }}>
+          <span style={{ whiteSpace: 'normal' }}>{t('settings.catOther')}</span>
         </Link>
       </div>
     </div>

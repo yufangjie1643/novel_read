@@ -37,6 +37,7 @@ export default function SettingsBackup() {
             onChange={(e) => setDavUser(e.target.value)}
             style={{
               flex: 1,
+              minWidth: 0,
               padding: '8px 12px',
               borderRadius: 8,
               border: '1px solid #e0e0e0',
@@ -52,6 +53,7 @@ export default function SettingsBackup() {
             onChange={(e) => setDavPass(e.target.value)}
             style={{
               flex: 1,
+              minWidth: 0,
               padding: '8px 12px',
               borderRadius: 8,
               border: '1px solid #e0e0e0',
