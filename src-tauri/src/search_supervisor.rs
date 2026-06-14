@@ -185,6 +185,44 @@ impl SearchSupervisor {
         fired
     }
 
+    /// Cancel up to `batch` in-flight tasks, picking the ones that
+    /// are oldest (lower `started_at`) AND have the lowest
+    /// `health_score`. Tasks with identical keys are cancelled in
+    /// unspecified order. Returns the number of tasks cancelled.
+    ///
+    /// Safe to call concurrently with `submit` / `cancel`: we hold
+    /// the read lock while collecting and only release the cancel
+    /// `Sender` clone afterwards (we use the existing sender, not
+    /// a clone, so this is fine).
+    pub async fn reclaim(&self, batch: usize) -> usize {
+        if batch == 0 {
+            return 0;
+        }
+        let to_cancel: Vec<tokio::sync::watch::Sender<bool>> = {
+            let map = self.in_flight.read().await;
+            let mut all: Vec<&InFlightTask> =
+                map.values().flat_map(|v| v.iter()).collect();
+            // Sort: oldest first (smaller started_at), then lowest
+            // health first (smaller health_score).
+            all.sort_by(|a, b| {
+                a.started_at
+                    .cmp(&b.started_at)
+                    .then(a.health_score.partial_cmp(&b.health_score).unwrap_or(std::cmp::Ordering::Equal))
+            });
+            all.into_iter()
+                .take(batch)
+                .map(|t| t.cancel.clone())
+                .collect()
+        };
+        let mut fired = 0usize;
+        for tx in to_cancel {
+            if tx.send(true).is_ok() {
+                fired += 1;
+            }
+        }
+        fired
+    }
+
     /// Read the last completed search snapshot, if any.
     pub async fn last_search(&self) -> Option<SearchSnapshot> {
         self.last_search.lock().await.clone()
@@ -383,5 +421,60 @@ mod tests {
     async fn last_search_initially_none() {
         let sup = SearchSupervisor::new_for_tests();
         assert!(sup.last_search().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn reclaim_picks_oldest_first() {
+        let sup = SearchSupervisor::new_for_tests();
+        let (tx_old, mut rx_old) = tokio::sync::watch::channel(false);
+        let (tx_new, _rx_new) = tokio::sync::watch::channel(false);
+        {
+            let mut map = sup.in_flight.write().await;
+            let entry = map
+                .entry(RequestId("req-x".to_string()))
+                .or_default();
+            // Insert "new" first, then "old" with an earlier Instant
+            // (Instant is monotonic, so we sleep briefly).
+            entry.push(InFlightTask {
+                source_url: "new".into(),
+                source_name: "n".into(),
+                health_score: 1.0,
+                started_at: Instant::now(),
+                cancel: tx_new,
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            entry.push(InFlightTask {
+                source_url: "old".into(),
+                source_name: "o".into(),
+                health_score: 1.0,
+                started_at: Instant::now(),
+                cancel: tx_old,
+            });
+        }
+        let n = sup.reclaim(1).await;
+        assert_eq!(n, 1);
+        // Old was fired
+        rx_old.changed().await.unwrap();
+        assert!(*rx_old.borrow());
+    }
+
+    #[tokio::test]
+    async fn reclaim_zero_batch_is_noop() {
+        let sup = SearchSupervisor::new_for_tests();
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        {
+            let mut map = sup.in_flight.write().await;
+            map.entry(RequestId("req".to_string())).or_default().push(
+                InFlightTask {
+                    source_url: "u".into(),
+                    source_name: "n".into(),
+                    health_score: 1.0,
+                    started_at: Instant::now(),
+                    cancel: tx,
+                },
+            );
+        }
+        let n = sup.reclaim(0).await;
+        assert_eq!(n, 0);
     }
 }
