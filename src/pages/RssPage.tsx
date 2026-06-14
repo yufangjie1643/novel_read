@@ -12,6 +12,7 @@ import type {
   SourceLink,
 } from '../types';
 import { useUiMode } from '../uiMode';
+import { useLongPress } from '../hooks/useLongPress';
 
 const desktopCardStyle: CSSProperties = {
   background: '#fff',
@@ -378,13 +379,50 @@ function splitSourceGroups(group?: string) {
     .filter(Boolean);
 }
 
+type MobileSourceGridItemProps = {
+  source: RssSource;
+  onOpen: () => void;
+  onLongPress: () => void;
+};
+
+function MobileSourceGridItem({ source, onOpen, onLongPress }: MobileSourceGridItemProps) {
+  const longPress = useLongPress(onLongPress, { threshold: 400 });
+
+  return (
+    <button
+      type="button"
+      className="android-rss-grid-item"
+      onClick={longPress.handleClick(onOpen)}
+      onPointerDown={longPress.onPointerDown}
+      onPointerUp={longPress.onPointerUp}
+      onPointerCancel={longPress.onPointerCancel}
+      onPointerLeave={longPress.onPointerLeave}
+      style={{
+        ...mobileGridItemStyle,
+        transform: longPress.isPressed ? 'scale(0.97)' : 'scale(1)',
+        transition: 'transform 80ms ease-out',
+        touchAction: 'manipulation',
+      }}
+    >
+      <span className="android-rss-icon-wrap">
+        <img
+          src={source.source_icon?.trim() || '/mobile-media/sub_line.svg'}
+          alt=""
+          onError={(e) => {
+            e.currentTarget.src = '/mobile-media/sub_line.svg';
+          }}
+        />
+      </span>
+      <span className="android-rss-grid-name">{source.source_name}</span>
+    </button>
+  );
+}
+
 export default function RssPage() {
   const { t } = useTranslation();
   const { isMobileUi } = useUiMode();
   const aliveRef = useRef(true);
   const loadRequestRef = useRef(0);
-  const longPressTimerRef = useRef<number | null>(null);
-  const longPressTriggeredRef = useRef(false);
   const [sources, setSources] = useState<RssSource[]>([]);
   const [articles, setArticles] = useState<RssArticle[]>([]);
   const [selectedSource, setSelectedSource] = useState<RssSource | null>(null);
@@ -433,10 +471,6 @@ export default function RssPage() {
     return () => {
       aliveRef.current = false;
       loadRequestRef.current += 1;
-      if (longPressTimerRef.current != null) {
-        window.clearTimeout(longPressTimerRef.current);
-        longPressTimerRef.current = null;
-      }
     };
   }, [loadSources]);
 
@@ -750,29 +784,6 @@ export default function RssPage() {
       }
     } catch (e) {
       setMessage(t('rss.loadFavoritesFailed', { error: String(e) }));
-    }
-  }
-
-  function openMobileSourceMenu(source: RssSource) {
-    setMobileMenuSource(source);
-  }
-
-  function startMobileSourcePress(source: RssSource) {
-    longPressTriggeredRef.current = false;
-    if (longPressTimerRef.current != null) {
-      window.clearTimeout(longPressTimerRef.current);
-    }
-    longPressTimerRef.current = window.setTimeout(() => {
-      longPressTriggeredRef.current = true;
-      openMobileSourceMenu(source);
-      longPressTimerRef.current = null;
-    }, 520);
-  }
-
-  function cancelMobileSourcePress() {
-    if (longPressTimerRef.current != null) {
-      window.clearTimeout(longPressTimerRef.current);
-      longPressTimerRef.current = null;
     }
   }
 
@@ -1209,10 +1220,6 @@ export default function RssPage() {
                 type="button"
                 style={mobileGridItemStyle}
                 onClick={() => {
-                  if (longPressTriggeredRef.current) {
-                    longPressTriggeredRef.current = false;
-                    return;
-                  }
                   setRuleSubsOpen(true);
                   loadRuleSubs();
                 }}
@@ -1228,38 +1235,12 @@ export default function RssPage() {
               </button>
 
               {mobileSources.map((source) => (
-                <button
+                <MobileSourceGridItem
                   key={source.source_url}
-                  type="button"
-                  style={mobileGridItemStyle}
-                  onClick={() => {
-                    if (longPressTriggeredRef.current) {
-                      longPressTriggeredRef.current = false;
-                      return;
-                    }
-                    loadArticles(source);
-                  }}
-                  onPointerDown={() => startMobileSourcePress(source)}
-                  onPointerUp={cancelMobileSourcePress}
-                  onPointerCancel={cancelMobileSourcePress}
-                  onPointerLeave={cancelMobileSourcePress}
-                  onContextMenu={(e) => {
-                    e.preventDefault();
-                    openMobileSourceMenu(source);
-                  }}
-                >
-                  <span style={mobileIconWrapStyle}>
-                    <img
-                      src={source.source_icon?.trim() || '/mobile-media/sub_line.svg'}
-                      alt=""
-                      style={{ maxWidth: '100%', maxHeight: '100%' }}
-                      onError={(e) => {
-                        e.currentTarget.src = '/mobile-media/sub_line.svg';
-                      }}
-                    />
-                  </span>
-                  <span style={mobileGridNameStyle}>{source.source_name}</span>
-                </button>
+                  source={source}
+                  onOpen={() => loadArticles(source)}
+                  onLongPress={() => setMobileMenuSource(source)}
+                />
               ))}
             </div>
 
