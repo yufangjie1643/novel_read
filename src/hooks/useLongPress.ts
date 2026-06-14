@@ -32,7 +32,7 @@ export function useLongPress(
   }, []);
 
   const onPointerDown = useCallback(
-    (_e: ReactPointerEvent<HTMLElement>) => {
+    () => {
       triggeredRef.current = false;
       clearTimer();
       setPressed(true);
@@ -48,7 +48,7 @@ export function useLongPress(
   );
 
   const cancel = useCallback(
-    (_e: ReactPointerEvent<HTMLElement>) => {
+    () => {
       clearTimer();
       setPressed(false);
       onCancel?.();
