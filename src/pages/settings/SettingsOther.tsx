@@ -1,7 +1,9 @@
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { useEffect, useState } from 'react';
 import { useReaderPrefs } from './useReaderPrefs';
 import { useServerControl } from './useServerControl';
+import { useSearchSettings, type SearchSettings } from './useSearchSettings';
 import { btnStyle, useSettingsStyles } from './styles';
 
 type SettingsOtherProps = {
@@ -100,6 +102,13 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
 
       {(!mode || mode === 'other') && (
         <div style={sectionStyle}>
+          <div style={sectionTitle}>{t('settings.searchResource')}</div>
+          <SearchResourceSection />
+        </div>
+      )}
+
+      {(!mode || mode === 'other') && (
+        <div style={sectionStyle}>
           <div style={sectionTitle}>{t('settings.reset')}</div>
           <div style={rowStyle}>
             <span style={labelStyle}>{t('settings.resetDesc')}</span>
@@ -174,6 +183,146 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
             <p style={{ margin: '0 0 8px' }}>Legado Desktop</p>
             <p style={{ margin: 0, color: '#888' }}>{t('settings.aboutDesc')}</p>
           </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+const inputNarrowStyle: React.CSSProperties = {
+  width: 90,
+  padding: '6px 10px',
+  fontSize: 13,
+  border: '1px solid #ddd',
+  borderRadius: 6,
+};
+
+function SearchResourceSection() {
+  const { t } = useTranslation();
+  const { settings, save, error, saving } = useSearchSettings();
+  const { rowStyle, labelStyle } = useSettingsStyles();
+  const [draft, setDraft] = useState<SearchSettings>(settings);
+
+  useEffect(() => {
+    setDraft(settings);
+  }, [settings]);
+
+  const handleSave = () => {
+    void save(draft);
+  };
+
+  const handleReset = () => {
+    setDraft({
+      max_concurrency: 8,
+      memory_soft_limit_mb: 400,
+      per_source_timeout_ms: 2000,
+      reclaim_batch: 2,
+    });
+  };
+
+  return (
+    <>
+      <div style={rowStyle}>
+        <span style={labelStyle}>{t('settings.maxConcurrency')}</span>
+        <input
+          type="number"
+          min={1}
+          max={64}
+          value={draft.max_concurrency}
+          onChange={(e) =>
+            setDraft({ ...draft, max_concurrency: Number(e.target.value) })
+          }
+          style={inputNarrowStyle}
+        />
+      </div>
+      <div style={rowStyle}>
+        <span style={labelStyle}>{t('settings.memorySoftLimit')}</span>
+        <input
+          type="number"
+          min={50}
+          max={4096}
+          value={draft.memory_soft_limit_mb}
+          onChange={(e) =>
+            setDraft({ ...draft, memory_soft_limit_mb: Number(e.target.value) })
+          }
+          style={inputNarrowStyle}
+        />
+      </div>
+      <div style={rowStyle}>
+        <span style={labelStyle}>{t('settings.perSourceTimeout')}</span>
+        <input
+          type="number"
+          min={500}
+          max={60000}
+          value={draft.per_source_timeout_ms}
+          onChange={(e) =>
+            setDraft({ ...draft, per_source_timeout_ms: Number(e.target.value) })
+          }
+          style={inputNarrowStyle}
+        />
+      </div>
+      <div style={rowStyle}>
+        <span style={labelStyle}>{t('settings.reclaimBatch')}</span>
+        <input
+          type="number"
+          min={1}
+          max={16}
+          value={draft.reclaim_batch}
+          onChange={(e) =>
+            setDraft({ ...draft, reclaim_batch: Number(e.target.value) })
+          }
+          style={inputNarrowStyle}
+        />
+      </div>
+      <div style={rowStyle}>
+        <span style={labelStyle} />
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{
+              padding: '6px 14px',
+              fontSize: 13,
+              border: '1px solid #bbdefb',
+              borderRadius: 8,
+              background: '#eef4fd',
+              color: '#1976d2',
+              cursor: saving ? 'not-allowed' : 'pointer',
+              fontWeight: 500,
+            }}
+          >
+            {t('common.save')}
+          </button>
+          <button
+            onClick={handleReset}
+            style={{
+              padding: '6px 14px',
+              fontSize: 13,
+              border: '1px solid #ddd',
+              borderRadius: 8,
+              background: '#fff',
+              color: '#555',
+              cursor: 'pointer',
+              fontWeight: 500,
+            }}
+          >
+            {t('common.reset')}
+          </button>
+        </div>
+      </div>
+      {error && (
+        <div
+          style={{
+            background: '#ffebee',
+            color: '#c62828',
+            padding: '8px 12px',
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 500,
+            marginTop: 10,
+          }}
+        >
+          {error}
         </div>
       )}
     </>
