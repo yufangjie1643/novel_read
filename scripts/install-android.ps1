@@ -62,12 +62,12 @@ if ($screenW -eq 0 -or $screenH -eq 0) {
 Write-Host "Screen: ${screenW}x${screenH}"
 
 # Predicted position of the MIUI AdbInstallActivity "Continue" button.
-# On 1080x2400 the two buttons are at y~2188 with widths ~425 each;
-# the "Continue" is on the right at x~768. We scale relative to screen
-# so other resolutions land on the right button too.
-$predictedX = [int]($screenW * 0.71)   # ~75% across, in the right button
+# On Xiaomi/MIUI, the affirmative ("Continue") button is on the LEFT,
+# opposite the standard Android AlertDialog convention. AGENTS.md confirms
+# this: bounds=[99,2119][523,2257] on 1080x2400 → center (311, 2188).
+$predictedX = [int]($screenW * 0.29)   # ~29% across, in the LEFT button
 $predictedY = [int]($screenH * 0.91)   # ~91% down, in the bottom button row
-Write-Host "Predicted Continue button: ($predictedX, $predictedY)"
+Write-Host "Predicted Continue button: ($predictedX, $predictedY) [Xiaomi: LEFT]"
 
 # --- Start install in background ---
 $logPath = Join-Path $env:TEMP "install_$([guid]::NewGuid().ToString('N').Substring(0,8)).log"
