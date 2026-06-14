@@ -31,6 +31,7 @@ rquickjs = { version = "0.9", features = ["futures", "macro"] }
 scraper = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "cookies", "json", "gzip", "rustls-tls", "charset", "http2"] }
 regex = "1"
+sysinfo = "0.32"
 encoding_rs = "0.8"
 url = "2"
 base64 = "0.22"
