@@ -949,10 +949,9 @@ export default function RssPage() {
   const showMobileArticleMessage =
     Boolean(message) && (messageIsError(message) || fetching || sourceLinksLoading || installing);
 
-  if (isMobileUi) {
-    if (selectedSource) {
-      return (
-        <div className="android-screen" style={mobileArticlePageStyle}>
+  const mainContent = isMobileUi ? (
+    selectedSource ? (
+      <div className="android-screen" style={mobileArticlePageStyle}>
           <header style={mobileTitlebarCompactStyle}>
             <button
               type="button"
@@ -1009,10 +1008,7 @@ export default function RssPage() {
             renderArticleList(true)
           )}
         </div>
-      );
-    }
-
-    return (
+    ) : (
       <div className="android-screen">
         <header style={mobileTitlebarStyle}>
           <div style={mobileTitleRowStyle}>
@@ -1300,36 +1296,9 @@ export default function RssPage() {
             </section>
           </div>
         )}
-
-        <ConfirmDialog
-          isOpen={confirmDeleteSource != null}
-          title={t('common.confirm')}
-          message={
-            confirmDeleteSource
-              ? t('rss.deleteConfirm', { name: confirmDeleteSource.source_name })
-              : ''
-          }
-          confirmText={t('common.delete')}
-          danger
-          onConfirm={() => confirmDeleteSource && performDeleteSource(confirmDeleteSource)}
-          onCancel={() => setConfirmDeleteSource(null)}
-        />
-        <PromptDialog
-          isOpen={promptRenameSource != null}
-          title={t('common.edit')}
-          message={t('rss.editNamePrompt')}
-          initialValue={promptRenameSource?.source_name ?? ''}
-          confirmText={t('common.confirm')}
-          onSubmit={(newName) =>
-            promptRenameSource && performRenameSource(promptRenameSource, newName)
-          }
-          onCancel={() => setPromptRenameSource(null)}
-        />
       </div>
-    );
-  }
-
-  return (
+    )
+  ) : (
     <div style={{ display: 'flex', gap: 20, minHeight: '70vh' }}>
       <div style={{ width: 280, flexShrink: 0 }}>
         <div style={{ ...desktopCardStyle, padding: 16 }}>
@@ -1450,5 +1419,35 @@ export default function RssPage() {
         )}
       </div>
     </div>
+  );
+
+  return (
+    <>
+      {mainContent}
+      <ConfirmDialog
+        isOpen={confirmDeleteSource != null}
+        title={t('common.confirm')}
+        message={
+          confirmDeleteSource
+            ? t('rss.deleteConfirm', { name: confirmDeleteSource.source_name })
+            : ''
+        }
+        confirmText={t('common.delete')}
+        danger
+        onConfirm={() => confirmDeleteSource && performDeleteSource(confirmDeleteSource)}
+        onCancel={() => setConfirmDeleteSource(null)}
+      />
+      <PromptDialog
+        isOpen={promptRenameSource != null}
+        title={t('common.edit')}
+        message={t('rss.editNamePrompt')}
+        initialValue={promptRenameSource?.source_name ?? ''}
+        confirmText={t('common.confirm')}
+        onSubmit={(newName) =>
+          promptRenameSource && performRenameSource(promptRenameSource, newName)
+        }
+        onCancel={() => setPromptRenameSource(null)}
+      />
+    </>
   );
 }
