@@ -4,6 +4,7 @@ pub mod commands;
 pub mod db;
 pub mod http;
 pub mod local_book;
+pub mod search_supervisor;
 pub mod server;
 pub mod state;
 pub mod webdav;
@@ -18,6 +19,7 @@ use tauri::{LogicalSize, Size};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let app_state = db::init_app_state(app.handle())?;
             app.manage(app_state);
@@ -141,6 +143,7 @@ pub fn run() {
             explore_books,
             fetch_book_info,
             fetch_chapter_list,
+            ping_source,
             fetch_chapter_content,
             // Book update check
             check_book_update,
@@ -151,6 +154,7 @@ pub fn run() {
             get_local_chapter_content,
             save_local_chapter_content,
             batch_cache_chapters,
+            export_book_text,
             // Source debug commands
             debug_book_source,
             // Web server commands
