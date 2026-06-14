@@ -60,6 +60,49 @@ impl SearchSettings {
     }
 }
 
+/// Watches the current process RSS once per second and triggers
+/// `SearchSupervisor::reclaim` when RSS exceeds the soft limit.
+struct ResourceMonitor;
+
+impl ResourceMonitor {
+    /// Spawn the monitor loop on the tokio runtime. The handle is
+    /// stored in the supervisor; aborting the handle stops the loop.
+    pub fn start(sup: Arc<SearchSupervisor>) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            use sysinfo::{ProcessRefreshKind, RefreshKind};
+            let mut sys = sysinfo::System::new_with_specifics(
+                RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+            );
+            let pid = sysinfo::get_current_pid().expect("current pid");
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                sys.refresh_processes_specifics(
+                    sysinfo::ProcessesToUpdate::Some(&[pid]),
+                    true,
+                    ProcessRefreshKind::everything(),
+                );
+                let rss_mb = match sys.process(pid) {
+                    Some(p) => (p.memory() as f64) / 1024.0 / 1024.0,
+                    None => continue,
+                };
+                let (limit, batch) = {
+                    let s = sup.settings.read().await;
+                    (s.memory_soft_limit_mb, s.reclaim_batch)
+                };
+                if rss_mb > limit as f64 {
+                    let n = sup.reclaim(batch).await;
+                    if n > 0 {
+                        eprintln!(
+                            "[search_supervisor] rss={:.1}MB > {}MB, reclaimed {} task(s)",
+                            rss_mb, limit, n
+                        );
+                    }
+                }
+            }
+        })
+    }
+}
+
 /// One currently-running book source task.
 #[derive(Debug, Clone)]
 pub struct InFlightTask {
@@ -125,6 +168,21 @@ impl SearchSupervisor {
             monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
             app_handle: Some(app_handle),
         }
+    }
+
+    /// Start the resource monitor. Should be called exactly once,
+    /// right after the supervisor is constructed and stored in
+    /// `AppState`. Aborts the previous monitor if called twice.
+    pub fn start_monitor(self: &Arc<Self>) {
+        let sup = self.clone();
+        let handle = ResourceMonitor::start(sup);
+        // Store synchronously by blocking on the mutex briefly via
+        // try_lock; if contended, just abort the old handle.
+        let mut slot = self.monitor_handle.blocking_lock();
+        if let Some(old) = slot.take() {
+            old.abort();
+        }
+        *slot = Some(handle);
     }
 
     /// Submit a new search. If a previous search is in flight, all
