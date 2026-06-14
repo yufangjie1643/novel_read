@@ -51,8 +51,8 @@ export default function Settings() {
             <Route path="reader" element={<SettingsReader />} />
             <Route path="backup" element={<SettingsBackup />} />
             <Route path="bulk-import" element={<SettingsBulkImport />} />
-            <Route path="server" element={<SettingsOther />} />
-            <Route path="other" element={<SettingsOther />} />
+            <Route path="server" element={<SettingsOther mode="server" />} />
+            <Route path="other" element={<SettingsOther mode="other" />} />
             <Route path="*" element={<Navigate to="reader" replace />} />
           </Routes>
         </main>

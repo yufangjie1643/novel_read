@@ -4,7 +4,11 @@ import { useReaderPrefs } from './useReaderPrefs';
 import { useServerControl } from './useServerControl';
 import { btnStyle, useSettingsStyles } from './styles';
 
-export default function SettingsOther() {
+type SettingsOtherProps = {
+  mode?: 'server' | 'other';
+};
+
+export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
   const { t, i18n } = useTranslation();
   const { reset: resetReaderPrefs } = useReaderPrefs();
   const { sectionStyle, sectionTitle, rowStyle, labelStyle } = useSettingsStyles();
@@ -22,18 +26,21 @@ export default function SettingsOther() {
 
   return (
     <>
-      <div style={sectionStyle}>
-        <div style={sectionTitle}>{t('settings.language')}</div>
+      {(!mode || mode === 'other') && (
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>{t('settings.language')}</div>
         <div style={rowStyle}>
           <span style={labelStyle}>{t('settings.currentLanguage')}</span>
           <button onClick={toggleLang} style={btnStyle}>
             {i18n.language === 'zh' ? t('layout.langEn') : t('layout.langZh')}
           </button>
         </div>
-      </div>
+        </div>
+      )}
 
-      <div style={sectionStyle}>
-        <div style={sectionTitle}>{t('settings.tools')}</div>
+      {(!mode || mode === 'other') && (
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>{t('settings.tools')}</div>
         <div style={rowStyle}>
           <span style={labelStyle}>{t('settings.debugTool')}</span>
           <Link
@@ -88,10 +95,12 @@ export default function SettingsOther() {
             {t('layout.configMarket')} →
           </Link>
         </div>
-      </div>
+        </div>
+      )}
 
-      <div style={sectionStyle}>
-        <div style={sectionTitle}>{t('settings.reset')}</div>
+      {(!mode || mode === 'other') && (
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>{t('settings.reset')}</div>
         <div style={rowStyle}>
           <span style={labelStyle}>{t('settings.resetDesc')}</span>
           <button
@@ -110,10 +119,12 @@ export default function SettingsOther() {
             {t('settings.resetBtn')}
           </button>
         </div>
-      </div>
+        </div>
+      )}
 
-      <div style={sectionStyle}>
-        <div style={sectionTitle}>{t('settings.bookshelfShare')}</div>
+      {(!mode || mode === 'server') && (
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>{t('settings.bookshelfShare')}</div>
         <div style={rowStyle}>
           <span style={labelStyle}>
             {serverRunning
@@ -153,15 +164,18 @@ export default function SettingsOther() {
             {serverMessage.text}
           </div>
         )}
-      </div>
+        </div>
+      )}
 
-      <div style={sectionStyle}>
-        <div style={sectionTitle}>{t('settings.about')}</div>
+      {(!mode || mode === 'other') && (
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>{t('settings.about')}</div>
         <div style={{ fontSize: 14, color: '#666', lineHeight: 1.6 }}>
           <p style={{ margin: '0 0 8px' }}>Legado Desktop</p>
           <p style={{ margin: 0, color: '#888' }}>{t('settings.aboutDesc')}</p>
         </div>
-      </div>
+        </div>
+      )}
     </>
   );
 }
