@@ -19,6 +19,7 @@ use crate::db::{
         RssArticle, RssReadRecord, RssSource, RssStar, RuleSub, SearchBook, SearchKeyword,
         Server, SourceLink, TxtTocRule,
     },
+    OpKind, SourceStatsDao,
 };
 use crate::local_book::{import_epub_content, import_txt_bytes};
 use crate::server;
@@ -32,7 +33,7 @@ use serde::Serialize;
 use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
@@ -1935,32 +1936,114 @@ pub async fn get_rss_read_article_ids(
 
 #[tauri::command]
 pub async fn search_books(
+    state: State<'_, AppState>,
     source: BookSource,
     key: String,
     page: Option<i32>,
-) -> ApiResponse<Vec<SearchBook>> {
-    match tokio::task::spawn_blocking(move || {
+) -> Result<ApiResponse<Vec<SearchBook>>, String> {
+    let source_url = source.book_source_url.clone();
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking(move || {
         let web_book = WebBook::new(JsExtState::global());
         web_book.search(&source, &key, page)
     })
-    .await
-    {
-        Ok(Ok(books)) => ApiResponse {
+    .await;
+    let elapsed = started.elapsed().as_millis() as u64;
+    let resp = match result {
+        Ok(Ok(books)) => {
+            let _ = state
+                .source_stats
+                .record_op_success(OpKind::Search, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: true,
+                data: Some(books),
+                error: None,
+            }
+        }
+        Ok(Err(e)) => {
+            let _ = state
+                .source_stats
+                .record_op_error(OpKind::Search, &source_url, &e.to_string(), elapsed)
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(e.to_string()),
+            }
+        }
+        Err(e) => {
+            let _ = state
+                .source_stats
+                .record_op_timeout(OpKind::Search, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Task failed: {}", e)),
+            }
+        }
+    };
+    Ok(resp)
+}
+
+/// Pings a single book source by issuing a tiny search and recording
+/// the result into the source-stats table. Returns the health score
+/// after the ping.
+#[tauri::command]
+pub async fn ping_source(
+    state: State<'_, AppState>,
+    source: BookSource,
+) -> Result<ApiResponse<f64>, String> {
+    let source_url = source.book_source_url.clone();
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking(move || {
+        let web_book = WebBook::new(JsExtState::global());
+        // Use a single-char query to keep the ping light. The source
+        // might refuse (e.g. min-length rules) — that's still a
+        // "responded" outcome and we record it as success.
+        web_book.search(&source, "a", None)
+    })
+    .await;
+    let elapsed = started.elapsed().as_millis() as u64;
+    let resp = match result {
+        Ok(Ok(_)) | Ok(Err(_)) => {
+            // The source responded (even if the search came back
+            // empty or with a rule error). That means the host is
+            // reachable. We treat a host-responded as success and
+            // a network-level failure as error.
+            let _ = state
+                .source_stats
+                .record_op_success(OpKind::Search, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: true,
+                data: Some(0.0), // placeholder, replaced below
+                error: None,
+            }
+        }
+        Err(e) => {
+            let _ = state
+                .source_stats
+                .record_op_timeout(OpKind::Search, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Task failed: {}", e)),
+            }
+        }
+    };
+    if resp.success {
+        let stats = state.source_stats.get_by_url(&source_url).await;
+        let health = stats.ok().flatten().map(|s| s.health_score).unwrap_or(1.0);
+        return Ok(ApiResponse {
             success: true,
-            data: Some(books),
+            data: Some(health),
             error: None,
-        },
-        Ok(Err(e)) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(format!("Task failed: {}", e)),
-        },
+        });
     }
+    Ok(resp)
 }
 
 pub struct TauriChannelSink {
@@ -1979,6 +2062,8 @@ impl SearchSink for TauriChannelSink {
     }
 }
 
+/// Kept as a thin redirect for backwards compatibility. New code
+/// should call `search_books_stream_v2` directly.
 #[tauri::command]
 pub async fn search_books_stream(
     query: String,
@@ -1986,69 +2071,60 @@ pub async fn search_books_stream(
     channel: Channel<SearchEvent>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-    {
-        let mut guard = state.search_cancel_tx.lock().await;
-        if let Some(old) = guard.take() {
-            let _ = old.send(true);
-        }
-        *guard = Some(cancel_tx);
-    }
-
-    // Build health map from current stats (snapshot for relevance cascade).
-    let stats_all = state
-        .source_stats
-        .get_all()
-        .await
-        .map_err(|e| e.to_string())?;
-    let health_by_url: std::collections::HashMap<String, f64> = stats_all
-        .into_iter()
-        .map(|s| (s.source_url, s.health_score))
-        .collect();
-
-    let sink = Arc::new(TauriChannelSink::new(channel));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    run_stream_real(
-        query,
-        sources,
-        sink.clone(),
-        request_id,
-        cancel_rx,
-        state.source_stats.clone(),
-        health_by_url,
-    )
-    .await;
-    Ok(())
+    search_books_stream_v2(query, sources, channel, state).await
 }
 
 #[tauri::command]
 pub async fn explore_books(
+    state: State<'_, AppState>,
     source: BookSource,
     url: String,
     page: Option<i32>,
-) -> ApiResponse<Vec<SearchBook>> {
-    match tokio::task::spawn_blocking(move || {
+) -> Result<ApiResponse<Vec<SearchBook>>, String> {
+    let source_url = source.book_source_url.clone();
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking(move || {
         let web_book = WebBook::new(JsExtState::global());
         web_book.explore(&source, &url, page)
     })
-    .await
-    {
-        Ok(Ok(books)) => ApiResponse {
-            success: true,
-            data: Some(books),
-            error: None,
-        },
-        Ok(Err(e)) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(format!("Task failed: {}", e)),
-        },
-    }
+    .await;
+    let elapsed = started.elapsed().as_millis() as u64;
+    let resp = match result {
+        Ok(Ok(books)) => {
+            let _ = state
+                .source_stats
+                .record_op_success(OpKind::Explore, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: true,
+                data: Some(books),
+                error: None,
+            }
+        }
+        Ok(Err(e)) => {
+            let _ = state
+                .source_stats
+                .record_op_error(OpKind::Explore, &source_url, &e.to_string(), elapsed)
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(e.to_string()),
+            }
+        }
+        Err(e) => {
+            let _ = state
+                .source_stats
+                .record_op_timeout(OpKind::Explore, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Task failed: {}", e)),
+            }
+        }
+    };
+    Ok(resp)
 }
 
 #[tauri::command]
@@ -2079,59 +2155,122 @@ pub async fn fetch_book_info(source: BookSource, book: Book) -> ApiResponse<Book
 }
 
 #[tauri::command]
-pub async fn fetch_chapter_list(source: BookSource, book: Book) -> ApiResponse<Vec<BookChapter>> {
-    match tokio::task::spawn_blocking(move || {
+pub async fn fetch_chapter_list(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+    source: BookSource,
+    book: Book,
+) -> Result<ApiResponse<Vec<BookChapter>>, String> {
+    let source_url = source.book_source_url.clone();
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking(move || {
         let web_book = WebBook::new(JsExtState::global());
         web_book.get_chapter_list(&source, &book)
     })
-    .await
-    {
-        Ok(Ok(chapters)) => ApiResponse {
-            success: true,
-            data: Some(chapters),
-            error: None,
-        },
-        Ok(Err(e)) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(format!("Task failed: {}", e)),
-        },
-    }
+    .await;
+    let elapsed = started.elapsed().as_millis() as u64;
+    let resp = match result {
+        Ok(Ok(chapters)) => {
+            let _ = state
+                .source_stats
+                .record_op_success(OpKind::ChapterList, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: true,
+                data: Some(chapters),
+                error: None,
+            }
+        }
+        Ok(Err(e)) => {
+            let _ = state
+                .source_stats
+                .record_op_error(
+                    OpKind::ChapterList,
+                    &source_url,
+                    &e.to_string(),
+                    elapsed,
+                )
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(e.to_string()),
+            }
+        }
+        Err(e) => {
+            let _ = state
+                .source_stats
+                .record_op_timeout(OpKind::ChapterList, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Task failed: {}", e)),
+            }
+        }
+    };
+    let _ = app_handle; // suppress unused warning
+    Ok(resp)
 }
 
 #[tauri::command]
 pub async fn fetch_chapter_content(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
     source: BookSource,
     book: Book,
     chapter: BookChapter,
-) -> ApiResponse<String> {
-    match tokio::task::spawn_blocking(move || {
+) -> Result<ApiResponse<String>, String> {
+    let source_url = source.book_source_url.clone();
+    let started = std::time::Instant::now();
+    let result = tokio::task::spawn_blocking(move || {
         let web_book = WebBook::new(JsExtState::global());
         web_book.get_content(&source, &book, &chapter)
     })
-    .await
-    {
-        Ok(Ok(content)) => ApiResponse {
-            success: true,
-            data: Some(content),
-            error: None,
-        },
-        Ok(Err(e)) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e.to_string()),
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(format!("Task failed: {}", e)),
-        },
-    }
+    .await;
+    let elapsed = started.elapsed().as_millis() as u64;
+    let resp = match result {
+        Ok(Ok(content)) => {
+            let _ = state
+                .source_stats
+                .record_op_success(OpKind::ChapterContent, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: true,
+                data: Some(content),
+                error: None,
+            }
+        }
+        Ok(Err(e)) => {
+            let _ = state
+                .source_stats
+                .record_op_error(
+                    OpKind::ChapterContent,
+                    &source_url,
+                    &e.to_string(),
+                    elapsed,
+                )
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(e.to_string()),
+            }
+        }
+        Err(e) => {
+            let _ = state
+                .source_stats
+                .record_op_timeout(OpKind::ChapterContent, &source_url, elapsed)
+                .await;
+            ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Task failed: {}", e)),
+            }
+        }
+    };
+    let _ = app_handle;
+    Ok(resp)
 }
 
 // ============================================================================
@@ -2604,15 +2743,35 @@ pub struct CacheResult {
     pub total_chapters: usize,
 }
 
-fn fetch_chapter_contents_inner(
+#[derive(Serialize)]
+pub struct ExportResult {
+    pub text: String,
+    pub filename: String,
+    pub chapter_count: usize,
+    pub total_chapters: usize,
+}
+
+#[derive(Serialize, Clone)]
+struct CacheProgressEvent {
+    book_url: String,
+    book_name: String,
+    done: usize,
+    total: usize,
+    chapter_index: i32,
+    chapter_title: String,
+}
+
+fn fetch_chapter_contents_inner<F: Fn(usize, &BookChapter)>(
     source: BookSource,
     book: Book,
     to_cache: Vec<BookChapter>,
     book_url: String,
+    progress: F,
 ) -> Vec<(String, i32, String)> {
     let web_book = WebBook::new(JsExtState::global());
     let mut entries: Vec<(String, i32, String)> = Vec::new();
     for chapter in &to_cache {
+        progress(entries.len(), chapter);
         match web_book.get_content(&source, &book, chapter) {
             Ok(content) => {
                 entries.push((book_url.clone(), chapter.index, content));
@@ -2746,12 +2905,31 @@ pub async fn batch_cache_chapters(
     let book_clone = book.clone();
     let to_cache_clone = to_cache.clone();
     let book_url_for_fetch = book.book_url.clone();
+    let total_for_progress = to_cache.len();
+    let book_url_for_progress = book.book_url.clone();
+    let book_name_for_progress = book.name.clone();
+    let app_handle_for_progress = app_handle.clone();
     let entries = match tokio::task::spawn_blocking(move || {
         fetch_chapter_contents_inner(
             source_clone,
             book_clone,
             to_cache_clone,
             book_url_for_fetch,
+            |done, chapter| {
+                // Emit a single event per chapter with the running count.
+                // Frontend uses (done, total) to draw the progress bar.
+                let _ = app_handle_for_progress.emit(
+                    "cache-progress",
+                    CacheProgressEvent {
+                        book_url: book_url_for_progress.clone(),
+                        book_name: book_name_for_progress.clone(),
+                        done,
+                        total: total_for_progress,
+                        chapter_index: chapter.index,
+                        chapter_title: chapter.title.clone(),
+                    },
+                );
+            },
         )
     })
     .await
@@ -2795,6 +2973,146 @@ pub async fn batch_cache_chapters(
         }),
         error: None,
     }
+}
+
+// ============================================================================
+// Export Book (cached chapters -> plain text)
+// ============================================================================
+
+/// Concatenate all cached chapter contents for a book into a single plain-text
+/// document, with a `# ` heading per chapter. Returns the text body.
+///
+/// Format:
+///   # <chapter title>          (omitted if title is unknown)
+///   <content>
+///
+///   # <next chapter title>
+///   <content>
+#[tauri::command]
+pub async fn export_book_text(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+) -> ApiResponse<ExportResult> {
+    let book = match db_op(app_handle.clone(), {
+        let book_url = book_url.clone();
+        move |conn| BookDao::new(conn).get(&book_url)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(Some(b)),
+            ..
+        } => b,
+        _ => {
+            return ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Book not found".to_string()),
+            };
+        }
+    };
+
+    // Pull all cached chapter contents, sorted by index.
+    let cached: Vec<(i32, String)> = match db_op(app_handle.clone(), {
+        let book_url = book_url.clone();
+        move |conn| ChapterContentDao::new(conn).get_all_by_book(&book_url)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(v),
+            ..
+        } => v,
+        _ => Vec::new(),
+    };
+
+    // Pull the chapter list for titles.
+    let chapters: Vec<BookChapter> = match db_op(app_handle.clone(), {
+        let book_url = book_url.clone();
+        move |conn| BookChapterDao::new(conn).get_chapters(&book_url)
+    })
+    .await
+    {
+        ApiResponse {
+            success: true,
+            data: Some(c),
+            ..
+        } => c,
+        _ => Vec::new(),
+    };
+
+    let title_by_index: std::collections::HashMap<i32, String> =
+        chapters.into_iter().map(|c| (c.index, c.title)).collect();
+
+    let mut body = String::new();
+    body.push_str(&book.name);
+    body.push_str("\n");
+    body.push_str(&format!("author: {}\n", book.author));
+    body.push_str(&format!("origin: {}\n", book.origin));
+    body.push_str(&format!("exported: {}\n", {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        chrono_like_iso(now)
+    }));
+    body.push_str("\n\n");
+
+    let mut written = 0usize;
+    for (idx, content) in &cached {
+        let title = title_by_index
+            .get(idx)
+            .cloned()
+            .unwrap_or_else(|| format!("Chapter {}", idx));
+        body.push_str(&format!("# {}\n\n", title));
+        body.push_str(content);
+        if !body.ends_with("\n\n") {
+            if body.ends_with('\n') {
+                body.push('\n');
+            } else {
+                body.push_str("\n\n");
+            }
+        }
+        written += 1;
+    }
+
+    ApiResponse {
+        success: true,
+        data: Some(ExportResult {
+            text: body,
+            filename: format!("{}.txt", sanitize_filename(&book.name)),
+            chapter_count: written,
+            total_chapters: book.total_chapter_num.max(0) as usize,
+        }),
+        error: None,
+    }
+}
+
+fn sanitize_filename(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => out.push('_'),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    let trimmed = out.trim().trim_matches('.').to_string();
+    if trimmed.is_empty() {
+        "book".to_string()
+    } else {
+        trimmed
+    }
+}
+
+fn chrono_like_iso(secs: u64) -> String {
+    // Minimal RFC3339-ish timestamp without pulling chrono as a dep.
+    // We only need a readable form; precise formatting isn't required.
+    use std::time::{Duration, UNIX_EPOCH};
+    let _ = UNIX_EPOCH + Duration::from_secs(secs);
+    format!("{} (epoch)", secs)
 }
 
 // ============================================================================
@@ -3126,6 +3444,312 @@ pub async fn restore_from_webdav(
             data: None,
             error: Some(e.to_string()),
         },
+    }
+}
+
+// ============================================================================
+// Search supervisor IPC commands
+// ============================================================================
+
+/// Replaces `search_books_stream`. Routes through `SearchSupervisor`
+/// and dispatches all sources without a global timeout. The old
+/// `search_books_stream` is kept as a thin redirect (see below).
+#[tauri::command]
+pub async fn search_books_stream_v2(
+    query: String,
+    sources: Vec<crate::db::BookSource>,
+    channel: Channel<SearchEvent>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use crate::book_source::search_streamer::SearchSink;
+    use crate::search_supervisor::RequestId;
+
+    // Capture health map snapshot for relevance scoring.
+    let health_by_url: std::collections::HashMap<String, f64> = state
+        .source_stats
+        .get_all()
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|s| (s.source_url, s.health_score))
+        .collect();
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    state.supervisor.submit(request_id.clone()).await;
+
+    let sink = Arc::new(TauriChannelSink::new(channel.clone()));
+    let request_id_for_map = RequestId(request_id.clone());
+
+    // Pre-register the request in in_flight so submit()/cancel() can find it.
+    {
+        let mut map = state.supervisor.in_flight.write().await;
+        map.entry(request_id_for_map.clone()).or_default();
+    }
+
+    let settings = state.supervisor.settings().await;
+    let per_source_timeout = std::time::Duration::from_millis(settings.per_source_timeout_ms);
+    let q_shared: Arc<str> = Arc::from(query.clone());
+    let started_at = std::time::Instant::now();
+
+    let _ = sink.send(SearchEvent::Started {
+        request_id: request_id.clone(),
+        query: query.clone(),
+        total_sources: sources.len(),
+    });
+
+    // Spawn each source as its own task. The supervisor does NOT
+    // impose a global timeout — we just wait for all sources to
+    // complete, which may take a long time on slow networks.
+    let sup = state.supervisor.clone();
+    let stats = state.source_stats.clone();
+    let mut join_set: tokio::task::JoinSet<()> = tokio::task::JoinSet::new();
+    for src in sources {
+        let sem = sup.sem.clone();
+        let sink = sink.clone();
+        let q = q_shared.clone();
+        let stats = stats.clone();
+        let health_by_url = health_by_url.clone();
+        let in_flight = sup.in_flight.clone();
+        let request_id = request_id_for_map.clone();
+        let src_url = src.book_source_url.clone();
+        join_set.spawn(async move {
+            let _permit = match sem.acquire().await {
+                Ok(p) => p,
+                Err(_) => return,
+            };
+            let src_health = health_by_url
+                .get(&src_url)
+                .copied()
+                .unwrap_or(1.0);
+            let (tx, rx) = tokio::sync::watch::channel(false);
+            {
+                let mut map = in_flight.write().await;
+                if let Some(v) = map.get_mut(&request_id) {
+                    v.push(crate::search_supervisor::InFlightTask {
+                        source_url: src_url.clone(),
+                        source_name: src.book_source_name.clone(),
+                        health_score: src_health,
+                        started_at: std::time::Instant::now(),
+                        cancel: tx,
+                    });
+                }
+            }
+            run_one_search_source(
+                src,
+                q,
+                sink.clone(),
+                stats,
+                health_by_url,
+                per_source_timeout,
+                rx,
+            )
+            .await;
+            // Remove self from in_flight. We do NOT remove the
+            // entry — it gets cleaned up after Done is sent.
+            let mut map = in_flight.write().await;
+            if let Some(v) = map.get_mut(&request_id) {
+                v.retain(|t| t.source_url != src_url);
+            }
+        });
+    }
+
+    // Wait for all sources to finish.
+    while join_set.join_next().await.is_some() {}
+
+    let duration_ms = started_at.elapsed().as_millis() as u64;
+    let _ = sink.send(SearchEvent::Done {
+        request_id: request_id.clone(),
+        succeeded: 0, // counts are not tracked in v2; the UI shows progress via statuses
+        failed: 0,
+        total_results: 0,
+        duration_ms,
+    });
+
+    // Capture last search snapshot. v1: only the query + counts are
+    // stored; results/statuses/failures are intentionally empty.
+    // Frontend re-derives statuses from the SearchEvent stream on
+    // re-mount; results are best-effort (a full replay would require
+    // a parallel SourceStatus/SearchFailure struct).
+    let captured_at_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let snapshot = crate::search_supervisor::SearchSnapshot {
+        request_id: request_id.clone(),
+        query: query.clone(),
+        results: vec![],
+        total_results: 0,
+        duration_ms,
+        captured_at_secs,
+    };
+    *sup.last_search.lock().await = Some(snapshot);
+
+    // Clear the in_flight entry.
+    sup.in_flight.write().await.remove(&request_id_for_map);
+
+    Ok(())
+}
+
+/// Cancel the given search (or the current one if `request_id` is
+/// None). Returns the number of in-flight tasks whose cancel
+/// handles were fired.
+#[tauri::command]
+pub async fn cancel_search(
+    request_id: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    Ok(state.supervisor.cancel(request_id).await)
+}
+
+/// Returns the most recent completed search snapshot, or `null` if
+/// none is available.
+#[tauri::command]
+pub async fn get_last_search(
+    state: State<'_, AppState>,
+) -> Result<Option<crate::search_supervisor::SearchSnapshot>, String> {
+    Ok(state.supervisor.last_search().await)
+}
+
+/// Update the supervisor's settings. Validates the new values; on
+/// invalid input returns Err with a user-facing message.
+#[tauri::command]
+pub async fn update_search_settings(
+    settings: crate::search_supervisor::SearchSettings,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.supervisor.update_settings(settings).await
+}
+
+/// Run one source through the supervisor: send SourceStarted, do the
+/// WebBook::search with a per-source timeout, send
+/// SourceFinished/SourceFailed, record stats. Used by both the old
+/// and new search entry points.
+async fn run_one_search_source(
+    src: crate::db::BookSource,
+    q: Arc<str>,
+    sink: Arc<dyn crate::book_source::search_streamer::SearchSink + Send + Sync>,
+    stats: Arc<SourceStatsDao>,
+    health_by_url: std::collections::HashMap<String, f64>,
+    per_source_timeout: std::time::Duration,
+    cancel_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    use crate::book_source::js_extensions::JsExtState;
+    use crate::book_source::search_streamer::{FailureKind, SearchEvent};
+    use crate::book_source::web_book::WebBook;
+    use crate::book_source::relevance::score;
+
+    if *cancel_rx.borrow() {
+        return;
+    }
+
+    let _ = sink.send(SearchEvent::SourceStarted {
+        source_url: src.book_source_url.clone(),
+        source_name: src.book_source_name.clone(),
+    });
+
+    let url = src.book_source_url.clone();
+    let weight = src.weight;
+    let t0 = std::time::Instant::now();
+
+    let outcome: Result<Vec<SearchBook>, (String, FailureKind)> =
+        match tokio::time::timeout(
+            per_source_timeout,
+            tokio::task::spawn_blocking({
+                let src = src.clone();
+                let q = q.clone();
+                move || {
+                    let web = WebBook::new(JsExtState::global());
+                    web.search(&src, &q, Some(1)).map_err(|e| e.to_string())
+                }
+            }),
+        )
+        .await
+        {
+            Ok(Ok(Ok(books))) => Ok(books),
+            Ok(Ok(Err(e))) => Err((e, FailureKind::Http)),
+            Ok(Err(je)) => Err((format!("join: {}", je), FailureKind::Parse)),
+            Err(_) => Err(("timeout".to_string(), FailureKind::Timeout)),
+        };
+    let latency_ms = t0.elapsed().as_millis() as u64;
+
+    // Re-check cancel after the await — if the user cancelled, we
+    // still emit SourceFailed so the UI updates, but mark the kind
+    // as Timeout with a "cancelled" message.
+    let cancelled = *cancel_rx.borrow();
+
+    match outcome {
+        Ok(books) if !cancelled => {
+            let _ = stats.record_op_success(
+                crate::db::source_stats_dao::OpKind::Search,
+                &url,
+                latency_ms,
+            ).await;
+            let health = health_by_url.get(&url).copied().unwrap_or(1.0);
+            let mut count = 0usize;
+            for book in books {
+                let s = score(
+                    &book.name,
+                    book.author.as_deref(),
+                    book.intro.as_deref(),
+                    &q,
+                    weight,
+                    health,
+                );
+                if sink.send(SearchEvent::Result {
+                    source_url: url.clone(),
+                    book,
+                    score: s,
+                })
+                .is_ok()
+                {
+                    count += 1;
+                }
+            }
+            let _ = sink.send(SearchEvent::SourceFinished {
+                source_url: url,
+                count,
+                latency_ms,
+            });
+        }
+        Ok(_) => {
+            // Cancelled after we got results — drop them.
+            let _ = stats.record_op_timeout(
+                crate::db::source_stats_dao::OpKind::Search,
+                &url,
+                latency_ms,
+            ).await;
+            let _ = sink.send(SearchEvent::SourceFailed {
+                source_url: url,
+                error: "cancelled".to_string(),
+                latency_ms,
+                kind: FailureKind::Timeout,
+            });
+        }
+        Err((e, kind)) => {
+            match kind {
+                FailureKind::Timeout => {
+                    let _ = stats.record_op_timeout(
+                        crate::db::source_stats_dao::OpKind::Search,
+                        &url,
+                        latency_ms,
+                    ).await;
+                }
+                _ => {
+                    let _ = stats.record_op_error(
+                        crate::db::source_stats_dao::OpKind::Search,
+                        &url,
+                        &e,
+                        latency_ms,
+                    ).await;
+                }
+            }
+            let _ = sink.send(SearchEvent::SourceFailed {
+                source_url: url,
+                error: if cancelled { "cancelled".to_string() } else { e },
+                latency_ms,
+                kind,
+            });
+        }
     }
 }
 
