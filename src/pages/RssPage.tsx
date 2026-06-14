@@ -13,6 +13,8 @@ import type {
 } from '../types';
 import { useUiMode } from '../uiMode';
 import { useLongPress } from '../hooks/useLongPress';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { PromptDialog } from '../components/PromptDialog';
 
 const desktopCardStyle: CSSProperties = {
   background: '#fff',
@@ -441,6 +443,8 @@ export default function RssPage() {
   const [mobileGroupsOpen, setMobileGroupsOpen] = useState(false);
   const [mobileAddOpen, setMobileAddOpen] = useState(false);
   const [mobileMenuSource, setMobileMenuSource] = useState<RssSource | null>(null);
+  const [confirmDeleteSource, setConfirmDeleteSource] = useState<RssSource | null>(null);
+  const [promptRenameSource, setPromptRenameSource] = useState<RssSource | null>(null);
   const [mobileStarsOpen, setMobileStarsOpen] = useState(false);
   const [rssStars, setRssStars] = useState<RssStar[]>([]);
   const [ruleSubsOpen, setRuleSubsOpen] = useState(false);
@@ -699,7 +703,12 @@ export default function RssPage() {
   }
 
   async function deleteSource(source: RssSource) {
-    if (!confirm(t('rss.deleteConfirm', { name: source.source_name }))) return;
+    setMobileMenuSource(null);
+    setConfirmDeleteSource(source);
+  }
+
+  async function performDeleteSource(source: RssSource) {
+    setConfirmDeleteSource(null);
     try {
       const resp = await invoke<ApiResponse<null>>('delete_rss_source', { url: source.source_url });
       if (!resp.success) {
@@ -746,14 +755,15 @@ export default function RssPage() {
     setMobileMenuSource(null);
   }
 
-  async function editSourceName(source: RssSource) {
-    const nextName = prompt(t('rss.editNamePrompt'), source.source_name)?.trim();
-    if (!nextName || nextName === source.source_name) {
-      setMobileMenuSource(null);
-      return;
-    }
-    await updateSource(source, { source_name: nextName }, t('rss.sourceUpdated'));
+  function editSourceName(source: RssSource) {
     setMobileMenuSource(null);
+    setPromptRenameSource(source);
+  }
+
+  async function performRenameSource(source: RssSource, newName: string) {
+    setPromptRenameSource(null);
+    if (!newName || newName === source.source_name) return;
+    await updateSource(source, { source_name: newName }, t('rss.sourceUpdated'));
   }
 
   async function disableSource(source: RssSource) {
@@ -1290,6 +1300,31 @@ export default function RssPage() {
             </section>
           </div>
         )}
+
+        <ConfirmDialog
+          isOpen={confirmDeleteSource != null}
+          title={t('common.confirm')}
+          message={
+            confirmDeleteSource
+              ? t('rss.deleteConfirm', { name: confirmDeleteSource.source_name })
+              : ''
+          }
+          confirmText={t('common.delete')}
+          danger
+          onConfirm={() => confirmDeleteSource && performDeleteSource(confirmDeleteSource)}
+          onCancel={() => setConfirmDeleteSource(null)}
+        />
+        <PromptDialog
+          isOpen={promptRenameSource != null}
+          title={t('common.edit')}
+          message={t('rss.editNamePrompt')}
+          initialValue={promptRenameSource?.source_name ?? ''}
+          confirmText={t('common.confirm')}
+          onSubmit={(newName) =>
+            promptRenameSource && performRenameSource(promptRenameSource, newName)
+          }
+          onCancel={() => setPromptRenameSource(null)}
+        />
       </div>
     );
   }
