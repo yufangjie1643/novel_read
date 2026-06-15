@@ -366,7 +366,6 @@ export default function Explore() {
 
       {menuState && (
         <BookSourceMenu
-          group={menuState.group}
           anchorEl={menuState.anchorEl}
           onClose={() => setMenuState(null)}
           onAction={handleMenuAction}

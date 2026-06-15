@@ -1,17 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import type { BookSourceGroup as Group } from '../../types';
 
 export type BookSourceAction = 'edit' | 'top' | 'login' | 'searchThis' | 'refresh' | 'delete';
 
 export function BookSourceMenu({
-  group: _group,
   anchorEl,
   onClose,
   onAction,
 }: {
-  group: Group;
   anchorEl: HTMLElement | null;
   onClose: () => void;
   onAction: (action: BookSourceAction) => void;
