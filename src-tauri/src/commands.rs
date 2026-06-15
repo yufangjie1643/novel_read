@@ -9,16 +9,17 @@ use crate::book_source::{
 use crate::db::{
     app_dir,
     dao::{
-        BookChapterDao, BookDao, BookGroupDao, BookSourceDao, BookmarkDao, CacheDao,
-        ChapterContentDao, CookieDao, DictRuleDao, HttpTTSDao, KeyboardAssistDao, ReadRecordDao,
-        ReplaceRuleDao, RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao,
-        SearchKeywordDao, ServerDao, TxtTocRuleDao,
+        BookChapterDao, BookDao, BookGroupDao, BookProgressDao, BookSourceDao, BookmarkDao,
+        CacheDao, ChapterContentDao, CookieDao, DictRuleDao, HttpTTSDao, KeyboardAssistDao,
+        ReadRecordDao, ReplaceRuleDao, RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao,
+        RuleSubDao, SearchKeywordDao, ServerDao, TxtTocRuleDao,
     },
     models::{
-        Book, BookChapter, BookGroup, BookSource, BookSourceSummary, Bookmark, DictRule,
-        ExploreItemsPage, ExploreKind, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule,
-        RssArticle, RssReadRecord, RssSource, RssStar, RuleSub, SearchBook, SearchKeyword,
-        Server, SourceLink, TxtTocRule,
+        Book, BookChapter, BookGroup, BookProgressSnapshot, BookProgressSync, BookSource,
+        BookSourceSummary, Bookmark, DictRule, ExploreItemsPage, ExploreKind, HttpTTS,
+        KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource, RssStar,
+        RuleSub, SearchBook, SearchKeyword, Server, SourceLink, SyncBookProgressResult,
+        SyncDirection, TxtTocRule,
     },
     OpKind, SourceStatsDao,
 };
@@ -3982,6 +3983,336 @@ async fn run_one_search_source(
             progress.failed.fetch_add(1, Ordering::Relaxed);
             progress.emit();
         }
+    }
+}
+
+// ============================================================================
+// WebDAV Per-Book Progress Sync
+// ============================================================================
+
+/// Sync the read progress of a single book to/from WebDAV.
+///
+/// `direction`:
+/// - `"upload"` — force upload of local progress, overwriting remote.
+/// - `"download"` — force download of remote progress, overwriting local.
+/// - `"auto"` — fetch remote first, then upload if local is newer,
+///   download if remote is newer, or skip if they match.
+///
+/// WebDAV credentials (url / user / pass) are passed in by the
+/// frontend from `localStorage` (the existing `useWebDav` hook already
+/// owns that store). Returning a structured `SyncBookProgressResult`
+/// variant lets the frontend pick a localized toast for the outcome.
+#[tauri::command]
+pub async fn sync_book_progress(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+    direction: String,
+    webdav_url: String,
+    webdav_user: Option<String>,
+    webdav_pass: Option<String>,
+) -> Result<ApiResponse<SyncBookProgressResult>, String> {
+    let webdav_url = webdav_url.trim().to_string();
+    if webdav_url.is_empty() {
+        return Ok(ApiResponse {
+            success: true,
+            data: Some(SyncBookProgressResult::Failed {
+                book_url,
+                error: "WebDAV 未配置".to_string(),
+            }),
+            error: None,
+        });
+    }
+
+    let dir = match direction.as_str() {
+        "upload" => SyncDirection::Upload,
+        "download" => SyncDirection::Download,
+        _ => SyncDirection::Auto,
+    };
+
+    let now = chrono::Utc::now().timestamp_millis();
+    let client = WebDavClient::new(
+        webdav_url.clone(),
+        webdav_user
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        webdav_pass
+            .as_ref()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+    );
+
+    // Read the local book via the db_op helper.
+    let book_resp = db_op(app_handle.clone(), move |c| {
+        BookDao::new(c).get(&book_url)
+    })
+    .await;
+    let book: Book = match book_resp {
+        ApiResponse {
+            success: true,
+            data: Some(Some(b)),
+            ..
+        } => b,
+        ApiResponse {
+            success: true,
+            data: Some(None),
+            ..
+        } => {
+            return Ok(ApiResponse {
+                success: true,
+                data: Some(SyncBookProgressResult::Failed {
+                    book_url: String::new(),
+                    error: "book not found".to_string(),
+                }),
+                error: None,
+            });
+        }
+        ApiResponse {
+            success: false,
+            error: Some(e),
+            ..
+        } => {
+            return Ok(ApiResponse {
+                success: true,
+                data: Some(SyncBookProgressResult::Failed {
+                    book_url: String::new(),
+                    error: format!("db: {e}"),
+                }),
+                error: None,
+            });
+        }
+        _ => {
+            return Ok(ApiResponse {
+                success: true,
+                data: Some(SyncBookProgressResult::Failed {
+                    book_url: String::new(),
+                    error: "db failed".to_string(),
+                }),
+                error: None,
+            });
+        }
+    };
+
+    // Read the matching read_record (if any) so the snapshot includes
+    // accumulated read time. Optional: missing record means 0 minutes.
+    let book_name_for_rr = book.name.clone();
+    let rr_resp = db_op(app_handle.clone(), move |c| {
+        ReadRecordDao::new(c).get(&book_name_for_rr)
+    })
+    .await;
+    let read_time: i64 = match rr_resp {
+        ApiResponse {
+            success: true,
+            data: Some(Some(rr)),
+            ..
+        } => rr.read_time,
+        _ => 0,
+    };
+
+    let local = BookProgressSnapshot {
+        schema_version: 1,
+        book_url: book.book_url.clone(),
+        book_name: book.name.clone(),
+        chapter_index: book.dur_chapter_index,
+        chapter_pos: book.dur_chapter_pos,
+        chapter_title: book.dur_chapter_title.clone().unwrap_or_default(),
+        chapter_time: book.dur_chapter_time,
+        read_time,
+    };
+
+    let remote_path = format!("/legado-progress/{}.json", sanitize_filename(&book.name));
+
+    let result = match dir {
+        SyncDirection::Upload => {
+            do_book_progress_upload(&client, &app_handle, &book.book_url, &local, &remote_path, now)
+                .await
+        }
+        SyncDirection::Download => {
+            do_book_progress_download(&client, &app_handle, &book, &remote_path, now).await
+        }
+        SyncDirection::Auto => {
+            // Peek at remote first, then pick upload / download / skip.
+            let remote_body = client.download_to_string(&remote_path).await.ok().flatten();
+            let remote_time: i64 = remote_body
+                .as_ref()
+                .and_then(|b| serde_json::from_str::<BookProgressSnapshot>(b).ok())
+                .map(|s| s.chapter_time)
+                .unwrap_or(0);
+            if remote_time == 0 {
+                do_book_progress_upload(
+                    &client,
+                    &app_handle,
+                    &book.book_url,
+                    &local,
+                    &remote_path,
+                    now,
+                )
+                .await
+            } else if local.chapter_time > remote_time {
+                do_book_progress_upload(
+                    &client,
+                    &app_handle,
+                    &book.book_url,
+                    &local,
+                    &remote_path,
+                    now,
+                )
+                .await
+            } else if remote_time > local.chapter_time {
+                do_book_progress_download(&client, &app_handle, &book, &remote_path, now).await
+            } else {
+                Ok(SyncBookProgressResult::Skipped {
+                    book_url: book.book_url.clone(),
+                    reason: "in sync".to_string(),
+                })
+            }
+        }
+    };
+
+    match result {
+        Ok(r) => Ok(ApiResponse {
+            success: true,
+            data: Some(r),
+            error: None,
+        }),
+        Err(e) => Ok(ApiResponse {
+            success: true,
+            data: Some(SyncBookProgressResult::Failed {
+                book_url: book.book_url.clone(),
+                error: e,
+            }),
+            error: None,
+        }),
+    }
+}
+
+/// Look up the per-book sync metadata (last sync time + etag).
+#[tauri::command]
+pub async fn get_book_sync_status(
+    app_handle: tauri::AppHandle,
+    book_url: String,
+) -> Result<ApiResponse<Option<BookProgressSync>>, String> {
+    let resp = db_op(app_handle, move |c| {
+        BookProgressDao::new(c).get(&book_url)
+    })
+    .await;
+    Ok(ApiResponse {
+        success: resp.success,
+        data: resp.data,
+        error: resp.error,
+    })
+}
+
+async fn do_book_progress_upload(
+    client: &WebDavClient,
+    app_handle: &tauri::AppHandle,
+    book_url: &str,
+    local: &BookProgressSnapshot,
+    remote_path: &str,
+    now: i64,
+) -> Result<SyncBookProgressResult, String> {
+    let body = serde_json::to_string(local).map_err(|e| e.to_string())?;
+    client
+        .upload_string(remote_path, &body)
+        .await
+        .map_err(|e| e.to_string())?;
+    upsert_book_progress_sync(
+        app_handle,
+        book_url,
+        local.chapter_time,
+        local.chapter_time,
+        now,
+    )
+    .await?;
+    Ok(SyncBookProgressResult::Uploaded {
+        book_url: book_url.to_string(),
+        local_time: local.chapter_time,
+        remote_time: local.chapter_time,
+    })
+}
+
+async fn do_book_progress_download(
+    client: &WebDavClient,
+    app_handle: &tauri::AppHandle,
+    book: &Book,
+    remote_path: &str,
+    now: i64,
+) -> Result<SyncBookProgressResult, String> {
+    let body = client
+        .download_to_string(remote_path)
+        .await
+        .map_err(|e| e.to_string())?;
+    let body = body.ok_or_else(|| "remote file not found".to_string())?;
+    let snapshot: BookProgressSnapshot = serde_json::from_str(&body).map_err(|e| e.to_string())?;
+    let updated = Book {
+        dur_chapter_index: snapshot.chapter_index,
+        dur_chapter_pos: snapshot.chapter_pos,
+        dur_chapter_title: Some(snapshot.chapter_title.clone()),
+        dur_chapter_time: snapshot.chapter_time,
+        ..book.clone()
+    };
+    let update_resp = db_op(app_handle.clone(), move |c| {
+        BookDao::new(c).update(&updated).map(|_| ())
+    })
+    .await;
+    if !update_resp.success {
+        return Err(update_resp
+            .error
+            .unwrap_or_else(|| "db update failed".to_string()));
+    }
+    // Also stamp the read_time on the read_record so total reading
+    // minutes survive a download from another device.
+    let book_name_for_rr = book.name.clone();
+    let read_time_for_rr = snapshot.read_time;
+    if read_time_for_rr > 0 {
+        let _ = db_op(app_handle.clone(), move |c| {
+            ReadRecordDao::new(c)
+                .upsert(&ReadRecord {
+                    book_name: book_name_for_rr,
+                    read_time: read_time_for_rr,
+                    last_read: snapshot.chapter_time,
+                })
+                .map(|_| ())
+        })
+        .await;
+    }
+    upsert_book_progress_sync(
+        app_handle,
+        &book.book_url,
+        snapshot.chapter_time,
+        snapshot.chapter_time,
+        now,
+    )
+    .await?;
+    Ok(SyncBookProgressResult::Downloaded {
+        book_url: book.book_url.clone(),
+        local_time: snapshot.chapter_time,
+        remote_time: snapshot.chapter_time,
+    })
+}
+
+async fn upsert_book_progress_sync(
+    app_handle: &tauri::AppHandle,
+    book_url: &str,
+    local_time: i64,
+    remote_time: i64,
+    now: i64,
+) -> Result<(), String> {
+    let item = BookProgressSync {
+        book_url: book_url.to_string(),
+        last_local_time: local_time,
+        last_remote_time: remote_time,
+        last_synced_at: now,
+        remote_etag: None,
+    };
+    let resp = db_op(app_handle.clone(), move |c| {
+        BookProgressDao::new(c).upsert(&item).map(|_| ())
+    })
+    .await;
+    if resp.success {
+        Ok(())
+    } else {
+        Err(resp.error.unwrap_or_else(|| "db upsert failed".to_string()))
     }
 }
 

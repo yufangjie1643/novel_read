@@ -1,7 +1,7 @@
 use super::models::{
-    Book, BookChapter, BookGroup, BookProgressSnapshot, BookProgressSync, BookSource, Bookmark,
-    DictRule, ExploreItem, ExploreItemsPage, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule,
-    RssArticle, RssReadRecord, RssSource, RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
+    Book, BookChapter, BookGroup, BookProgressSync, BookSource, Bookmark, DictRule, ExploreItem,
+    ExploreItemsPage, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle,
+    RssReadRecord, RssSource, RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
 };
 use rusqlite::{params, Connection, Result, Row};
 
