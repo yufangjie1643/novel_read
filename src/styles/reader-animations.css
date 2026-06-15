@@ -1,0 +1,62 @@
+/* Reader content-area transitions for non-scroll pageAnims.
+   The wrapper is positioned absolutely over the content area while a
+   chapter swap is in flight; `data-anim` controls which CSS transform
+   animates in/out. Defaults to `none` so no extra DOM. */
+
+@keyframes readerCoverIn {
+  from {
+    transform: perspective(1200px) rotateY(-100deg);
+    transform-origin: left center;
+    opacity: 0;
+  }
+  to {
+    transform: perspective(1200px) rotateY(0deg);
+    transform-origin: left center;
+    opacity: 1;
+  }
+}
+@keyframes readerCoverOut {
+  from {
+    transform: perspective(1200px) rotateY(0deg);
+    transform-origin: left center;
+    opacity: 1;
+  }
+  to {
+    transform: perspective(1200px) rotateY(100deg);
+    transform-origin: left center;
+    opacity: 0;
+  }
+}
+@keyframes readerSlideIn {
+  from { transform: translateX(100%); opacity: 0.5; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+@keyframes readerSlideOut {
+  from { transform: translateX(0);   opacity: 1; }
+  to   { transform: translateX(-100%); opacity: 0; }
+}
+@keyframes readerSimIn {
+  from { transform: perspective(1500px) rotateY(-15deg) translateX(-30%); opacity: 0; }
+  to   { transform: perspective(1500px) rotateY(0deg) translateX(0); opacity: 1; }
+}
+@keyframes readerSimOut {
+  from { transform: perspective(1500px) rotateY(0deg) translateX(0); opacity: 1; }
+  to   { transform: perspective(1500px) rotateY(15deg) translateX(30%); opacity: 0; }
+}
+
+/* Animating content shell — applied to a wrapper the consumer renders
+   during a chapter transition. */
+.reader-page-anim {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.reader-page-anim[data-anim='cover'] .reader-page-anim__inner {
+  animation: readerCoverIn 0.45s ease both;
+}
+.reader-page-anim[data-anim='slide'] .reader-page-anim__inner {
+  animation: readerSlideIn 0.3s ease both;
+}
+.reader-page-anim[data-anim='simulation'] .reader-page-anim__inner {
+  animation: readerSimIn 0.45s ease both;
+}
