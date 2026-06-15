@@ -14,7 +14,21 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
   const { t, i18n } = useTranslation();
   const { reset: resetReaderPrefs } = useReaderPrefs();
   const { sectionStyle, sectionTitle, rowStyle, labelStyle } = useSettingsStyles();
-  const { serverRunning, serverUrl, serverMessage, toggling, toggleServer } = useServerControl();
+  const {
+    serverRunning,
+    serverUrl,
+    serverMessage,
+    toggling,
+    toggleServer,
+    authView,
+    authUsername,
+    authPassword,
+    authSaving,
+    setAuthUsername,
+    setAuthPassword,
+    saveAuth,
+    clearAuth,
+  } = useServerControl();
 
   function toggleLang() {
     const next = i18n.language.startsWith('zh') ? 'en' : 'zh';
@@ -173,6 +187,86 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
               {serverMessage.text}
             </div>
           )}
+
+          {/* Basic Auth credentials */}
+          <div style={{ ...rowStyle, marginTop: 16, alignItems: 'flex-start' }}>
+            <span style={labelStyle}>
+              {t('bookshelf.serverAuth', { defaultValue: 'HTTP 服务凭证' })}
+            </span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1, maxWidth: 360 }}>
+              <input
+                type="text"
+                placeholder={t('bookshelf.serverAuthUsername', { defaultValue: '用户名' })}
+                value={authUsername}
+                onChange={(e) => setAuthUsername(e.target.value)}
+                style={{
+                  padding: '6px 10px',
+                  fontSize: 13,
+                  border: '1px solid #ddd',
+                  borderRadius: 6,
+                }}
+              />
+              <input
+                type="password"
+                placeholder={
+                  authView
+                    ? t('bookshelf.serverAuthPasswordKeep', { defaultValue: '保持原密码不填' })
+                    : t('bookshelf.serverAuthPassword', { defaultValue: '密码' })
+                }
+                value={authPassword}
+                onChange={(e) => setAuthPassword(e.target.value)}
+                style={{
+                  padding: '6px 10px',
+                  fontSize: 13,
+                  border: '1px solid #ddd',
+                  borderRadius: 6,
+                }}
+              />
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  onClick={saveAuth}
+                  disabled={authSaving || !authUsername.trim() || !authPassword}
+                  style={{
+                    padding: '6px 14px',
+                    fontSize: 13,
+                    border: '1px solid #bbdefb',
+                    borderRadius: 8,
+                    background: '#eef4fd',
+                    color: '#1976d2',
+                    cursor: authSaving ? 'not-allowed' : 'pointer',
+                    fontWeight: 500,
+                  }}
+                >
+                  {t('common.save')}
+                </button>
+                {authView && (
+                  <button
+                    onClick={clearAuth}
+                    style={{
+                      padding: '6px 14px',
+                      fontSize: 13,
+                      border: '1px solid #ffcdd2',
+                      borderRadius: 8,
+                      background: '#fff0f0',
+                      color: '#f44336',
+                      cursor: 'pointer',
+                      fontWeight: 500,
+                    }}
+                  >
+                    {t('bookshelf.serverAuthClear', { defaultValue: '清除凭证' })}
+                  </button>
+                )}
+              </div>
+              {authView && (
+                <div style={{ fontSize: 12, color: '#666' }}>
+                  {t('bookshelf.serverAuthCurrent', {
+                    defaultValue: '当前用户: {{user}}',
+                    user: authView.username,
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

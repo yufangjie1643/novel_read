@@ -1,7 +1,7 @@
 use super::models::{
-    Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItem, ExploreItemsPage,
-    HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource,
-    RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
+    Book, BookChapter, BookGroup, BookProgress, BookSource, Bookmark, DictRule, ExploreItem,
+    ExploreItemsPage, HttpServerAuth, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule,
+    RssArticle, RssReadRecord, RssSource, RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
 };
 use rusqlite::{params, Connection, Result, Row};
 
@@ -221,6 +221,104 @@ impl<'a> BookDao<'a> {
 }
 
 // ============================================================================
+// BookProgressDao
+// ============================================================================
+
+/// Lightweight DAO that updates only the four reading-progress columns
+/// (`durChapterIndex`, `durChapterPos`, `durChapterTime`, `durChapterTitle`)
+/// of a book row. Use this instead of `update_book` when the caller only
+/// has progress data — avoids writing every Book column on every chapter
+/// flip.
+pub struct BookProgressDao<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> BookProgressDao<'a> {
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
+    }
+
+    pub fn save(&self, p: &BookProgress) -> Result<()> {
+        if p.book_url.is_empty() {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "book_url is required".to_string(),
+            ));
+        }
+        let affected = self.conn.execute(
+            r#"UPDATE books SET
+                durChapterIndex = ?2,
+                durChapterPos = ?3,
+                durChapterTime = ?4,
+                durChapterTitle = ?5
+            WHERE bookUrl = ?1"#,
+            params![
+                p.book_url,
+                p.dur_chapter_index,
+                p.dur_chapter_pos,
+                p.dur_chapter_time,
+                p.dur_chapter_title
+            ],
+        )?;
+        if affected == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
+        Ok(())
+    }
+}
+
+// ============================================================================
+// HttpServerAuthDao
+// ============================================================================
+
+/// Single-row DAO for the built-in HTTP server's Basic Auth credentials.
+/// The argon2 PHC string never leaves this DAO — the public `get` method
+/// returns `None` (use a separate view to surface the username only).
+pub struct HttpServerAuthDao<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> HttpServerAuthDao<'a> {
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
+    }
+
+    /// Fetch the raw record (includes the password hash). Use only inside
+    /// the server's auth path; do not return to IPC.
+    pub fn get(&self) -> Result<Option<HttpServerAuth>> {
+        let conn = self.conn;
+        let mut stmt = conn.prepare("SELECT username, password_hash, updated_at FROM http_server_auth WHERE id = 1")?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(HttpServerAuth {
+                username: row.get(0)?,
+                password_hash: row.get(1)?,
+                updated_at: row.get(2)?,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn set(&self, auth: &HttpServerAuth) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO http_server_auth (id, username, password_hash, updated_at)
+            VALUES (1, ?1, ?2, ?3)
+            ON CONFLICT(id) DO UPDATE SET
+                username = excluded.username,
+                password_hash = excluded.password_hash,
+                updated_at = excluded.updated_at"#,
+            params![auth.username, auth.password_hash, auth.updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM http_server_auth WHERE id = 1", [])?;
+        Ok(())
+    }
+}
+
+// ============================================================================
 // BookSourceDao
 // ============================================================================
 
@@ -284,6 +382,34 @@ impl<'a> BookSourceDao<'a> {
             params![url],
         )?;
         Ok(())
+    }
+
+    /// Insert multiple book sources in a single transaction.
+    /// Returns the number of rows inserted.
+    pub fn insert_many(&self, sources: &[BookSource]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        for s in sources {
+            tx.execute(
+                r#"INSERT INTO book_sources (
+                    bookSourceUrl, bookSourceName, bookSourceGroup, bookSourceType, bookUrlPattern,
+                    customOrder, enabled, enabledExplore, jsLib, enabledCookieJar, concurrentRate,
+                    header, loginUrl, loginUi, loginCheckJs, coverDecodeJs, bookSourceComment,
+                    variableComment, lastUpdateTime, respondTime, weight, exploreUrl, exploreScreen,
+                    ruleExplore, searchUrl, ruleSearch, ruleBookInfo, ruleToc, ruleContent, ruleReview
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30)"#,
+                params![
+                    s.book_source_url, s.book_source_name, s.book_source_group, s.book_source_type,
+                    s.book_url_pattern, s.custom_order, s.enabled as i32, s.enabled_explore as i32,
+                    s.js_lib, s.enabled_cookie_jar, s.concurrent_rate, s.header, s.login_url,
+                    s.login_ui, s.login_check_js, s.cover_decode_js, s.book_source_comment,
+                    s.variable_comment, s.last_update_time, s.respond_time, s.weight,
+                    s.explore_url, s.explore_screen, s.rule_explore, s.search_url,
+                    s.rule_search, s.rule_book_info, s.rule_toc, s.rule_content, s.rule_review
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(sources.len())
     }
 
     pub fn get(&self, url: &str) -> Result<Option<BookSource>> {
@@ -804,6 +930,29 @@ impl<'a> ReplaceRuleDao<'a> {
         self.conn
             .execute("DELETE FROM replace_rules WHERE id = ?1", params![id])?;
         Ok(())
+    }
+
+    /// Insert multiple replace rules in a single transaction.
+    pub fn insert_many(&self, rules: &[ReplaceRule]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        for rule in rules {
+            tx.execute(
+                r#"INSERT INTO replace_rules (
+                    name, pattern, replacement, scope, isRegex, enabled, "order"
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+                params![
+                    rule.name,
+                    rule.pattern,
+                    rule.replacement,
+                    rule.scope,
+                    rule.is_regex as i32,
+                    rule.enabled as i32,
+                    rule.order
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(rules.len())
     }
 
     pub fn get(&self, id: i64) -> Result<Option<ReplaceRule>> {
@@ -1360,6 +1509,31 @@ impl<'a> RssSourceDao<'a> {
         self.conn
             .execute("DELETE FROM rss_sources WHERE sourceUrl = ?1", params![url])?;
         Ok(())
+    }
+
+    /// Insert multiple RSS sources in a single transaction.
+    pub fn insert_many(&self, sources: &[RssSource]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        for s in sources {
+            tx.execute(
+                r#"INSERT INTO rss_sources (
+                    sourceUrl, sourceName, sourceGroup, sourceIcon, enabled, variable,
+                    customOrder, lastUpdateTime, loginUrl, loginUi, header, sortUrl,
+                    ruleArticles, ruleNextPage, ruleTitle, rulePubDate, ruleDescription,
+                    ruleImage, ruleLink, ruleContent, singleUrl
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)"#,
+                params![
+                    s.source_url, s.source_name, s.source_group, s.source_icon,
+                    s.enabled as i32, s.variable, s.custom_order, s.last_update_time,
+                    s.login_url, s.login_ui, s.header, s.sort_url,
+                    s.rule_articles, s.rule_next_page, s.rule_title, s.rule_pub_date,
+                    s.rule_description, s.rule_image, s.rule_link, s.rule_content,
+                    s.single_url as i32
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(sources.len())
     }
 
     pub fn get(&self, url: &str) -> Result<Option<RssSource>> {

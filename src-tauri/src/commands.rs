@@ -1,7 +1,7 @@
 use crate::book_source::{
     analyze_url::AnalyzeUrl,
     js_extensions::JsExtState,
-    search_streamer::{run_stream_real, SearchEvent, SearchSink},
+    search_streamer::{SearchEvent, SearchSink},
     source_loader::{load_source_from_url, parse_source_json},
     web_book::WebBook,
 };
@@ -10,14 +10,14 @@ use crate::db::{
     dao::{
         BookChapterDao, BookDao, BookGroupDao, BookSourceDao, BookmarkDao, CacheDao,
         ChapterContentDao, CookieDao, DictRuleDao, HttpTTSDao, KeyboardAssistDao, ReadRecordDao,
-        ReplaceRuleDao, RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao,
-        SearchKeywordDao, ServerDao, TxtTocRuleDao,
+        RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao, SearchKeywordDao,
+        ServerDao, TxtTocRuleDao,
     },
     models::{
-        Book, BookChapter, BookGroup, BookSource, BookSourceSummary, Bookmark, DictRule,
-        ExploreItemsPage, ExploreKind, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule,
-        RssArticle, RssReadRecord, RssSource, RssStar, RuleSub, SearchBook, SearchKeyword,
-        Server, SourceLink, TxtTocRule,
+        Book, BookChapter, BookGroup, BookProgress, BookSource, BookSourceSummary, Bookmark,
+        DictRule, ExploreItemsPage, ExploreKind, HttpServerAuthView, HttpTTS, KeyboardAssist,
+        ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource, RssStar, RuleMatchMeta,
+        RuleSub, SearchBook, SearchKeyword, Server, SourceLink, TxtTocRule,
     },
     OpKind, SourceStatsDao,
 };
@@ -82,6 +82,24 @@ pub struct ApiResponse<T> {
     pub success: bool,
     pub data: Option<T>,
     pub error: Option<String>,
+}
+
+impl<T> ApiResponse<T> {
+    pub fn success(data: T) -> Self {
+        Self {
+            success: true,
+            data: Some(data),
+            error: None,
+        }
+    }
+
+    pub fn error(msg: String) -> Self {
+        Self {
+            success: false,
+            data: None,
+            error: Some(msg),
+        }
+    }
 }
 
 /// Run a synchronous DB closure on a pooled connection off the Tauri IPC
@@ -274,7 +292,7 @@ pub async fn migrate_book_source(
 
 #[tauri::command]
 pub async fn get_book_sources(app_handle: tauri::AppHandle) -> ApiResponse<Vec<BookSource>> {
-    db_op(app_handle, |conn| BookSourceDao::new(conn).get_all()).await
+    db_op(app_handle, |conn| crate::controllers::book_source::list_all(conn)).await
 }
 
 #[tauri::command]
@@ -291,7 +309,7 @@ pub async fn get_source_stats(
 pub async fn get_enabled_book_sources(
     app_handle: tauri::AppHandle,
 ) -> ApiResponse<Vec<BookSource>> {
-    db_op(app_handle, |conn| BookSourceDao::new(conn).get_enabled()).await
+    db_op(app_handle, |conn| crate::controllers::book_source::list_enabled(conn)).await
 }
 
 #[tauri::command]
@@ -352,7 +370,7 @@ pub async fn get_book_source(
     app_handle: tauri::AppHandle,
     url: String,
 ) -> ApiResponse<Option<BookSource>> {
-    db_op(app_handle, move |conn| BookSourceDao::new(conn).get(&url)).await
+    db_op(app_handle, move |conn| crate::controllers::book_source::get(conn, &url)).await
 }
 
 #[tauri::command]
@@ -361,7 +379,7 @@ pub async fn add_book_source(
     source: BookSource,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        BookSourceDao::new(conn).insert(&source).map(|_| ())
+        crate::controllers::book_source::insert(conn, &source)
     })
     .await
 }
@@ -372,7 +390,7 @@ pub async fn update_book_source(
     source: BookSource,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        BookSourceDao::new(conn).update(&source).map(|_| ())
+        crate::controllers::book_source::update(conn, &source)
     })
     .await
 }
@@ -383,7 +401,7 @@ pub async fn delete_book_source(
     url: String,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        BookSourceDao::new(conn).delete(&url).map(|_| ())
+        crate::controllers::book_source::delete(conn, &url)
     })
     .await
 }
@@ -525,7 +543,7 @@ pub async fn delete_book_group(
 pub async fn get_replace_rules(
     app_handle: tauri::AppHandle,
 ) -> ApiResponse<Vec<ReplaceRule>> {
-    db_op(app_handle, |conn| ReplaceRuleDao::new(conn).get_all()).await
+    db_op(app_handle, |conn| crate::controllers::replace_rule::list_all(conn)).await
 }
 
 #[tauri::command]
@@ -534,7 +552,7 @@ pub async fn add_replace_rule(
     rule: ReplaceRule,
 ) -> ApiResponse<i64> {
     db_op(app_handle, move |conn| {
-        ReplaceRuleDao::new(conn).insert(&rule)
+        crate::controllers::replace_rule::insert(conn, &rule)
     })
     .await
 }
@@ -545,7 +563,7 @@ pub async fn update_replace_rule(
     rule: ReplaceRule,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        ReplaceRuleDao::new(conn).update(&rule).map(|_| ())
+        crate::controllers::replace_rule::update(conn, &rule)
     })
     .await
 }
@@ -556,7 +574,7 @@ pub async fn delete_replace_rule(
     id: i64,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        ReplaceRuleDao::new(conn).delete(id).map(|_| ())
+        crate::controllers::replace_rule::delete(conn, id)
     })
     .await
 }
@@ -808,7 +826,15 @@ pub async fn delete_http_tts(
 pub async fn get_rss_sources(
     app_handle: tauri::AppHandle,
 ) -> ApiResponse<Vec<RssSource>> {
-    db_op(app_handle, |conn| RssSourceDao::new(conn).get_all()).await
+    db_op(app_handle, |conn| crate::controllers::rss_source::list_all(conn)).await
+}
+
+#[tauri::command]
+pub async fn get_rss_source(
+    app_handle: tauri::AppHandle,
+    url: String,
+) -> ApiResponse<Option<RssSource>> {
+    db_op(app_handle, move |conn| crate::controllers::rss_source::get(conn, &url)).await
 }
 
 #[tauri::command]
@@ -817,7 +843,7 @@ pub async fn add_rss_source(
     source: RssSource,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        RssSourceDao::new(conn).insert(&source).map(|_| ())
+        crate::controllers::rss_source::insert(conn, &source)
     })
     .await
 }
@@ -828,7 +854,7 @@ pub async fn update_rss_source(
     source: RssSource,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        RssSourceDao::new(conn).update(&source).map(|_| ())
+        crate::controllers::rss_source::update(conn, &source)
     })
     .await
 }
@@ -839,7 +865,7 @@ pub async fn delete_rss_source(
     url: String,
 ) -> ApiResponse<()> {
     db_op(app_handle, move |conn| {
-        RssSourceDao::new(conn).delete(&url).map(|_| ())
+        crate::controllers::rss_source::delete(conn, &url)
     })
     .await
 }
@@ -3380,37 +3406,49 @@ pub fn start_web_server(
     let port = port.unwrap_or(1122);
     let state = app_handle.state::<AppState>();
     let pool = state.db.clone();
-    match server::start_server(pool, port) {
-        Ok(addr) => ApiResponse {
-            success: true,
-            data: Some(addr),
-            error: None,
-        },
-        Err(e) => ApiResponse {
-            success: false,
-            data: None,
-            error: Some(e),
-        },
+
+    // Load credentials off the async runtime before handing off to the
+    // synchronous server starter. Fails fast with a clear Chinese error if
+    // the user hasn't configured Basic Auth yet.
+    let creds = match load_http_server_credentials(&pool) {
+        Ok(c) => c,
+        Err(e) => return ApiResponse::error(e),
+    };
+
+    match server::start_server(pool, port, creds) {
+        Ok(addr) => ApiResponse::success(addr),
+        Err(e) => ApiResponse::error(e),
     }
+}
+
+fn load_http_server_credentials(
+    pool: &crate::db::AppPool,
+) -> Result<crate::db::HttpServerAuth, String> {
+    use deadpool::managed::Object;
+    tauri::async_runtime::block_on(async move {
+        let pool = pool.clone();
+        let obj: Object<_> = pool.get().await.map_err(|e| format!("pool: {}", e))?;
+        obj.interact(|conn| {
+            crate::controllers::http_server_auth::get(conn)
+                .map_err(|e| e.to_string())
+                .and_then(|opt| {
+                    opt.ok_or_else(|| "请先在设置页配置 HTTP 服务凭证".to_string())
+                })
+        })
+        .await
+        .map_err(|e: deadpool_sync::InteractError| e.to_string())?
+    })
 }
 
 #[tauri::command]
 pub fn stop_web_server() -> ApiResponse<()> {
     server::stop_server();
-    ApiResponse {
-        success: true,
-        data: Some(()),
-        error: None,
-    }
+    ApiResponse::success(())
 }
 
 #[tauri::command]
 pub fn get_web_server_status() -> ApiResponse<bool> {
-    ApiResponse {
-        success: true,
-        data: Some(server::is_server_running()),
-        error: None,
-    }
+    ApiResponse::success(server::is_server_running())
 }
 
 // ============================================================================
@@ -3912,6 +3950,111 @@ async fn run_one_search_source(
             progress.emit();
         }
     }
+}
+
+// ============================================================================
+// save_book_progress — lightweight progress-only update.
+// Avoids the cost of re-writing every Book column on every chapter flip.
+// ============================================================================
+
+#[tauri::command]
+pub async fn save_book_progress(
+    app_handle: tauri::AppHandle,
+    progress: BookProgress,
+) -> ApiResponse<()> {
+    db_op(app_handle, move |conn| {
+        crate::controllers::book_progress::save(conn, &progress)
+    })
+    .await
+}
+
+// ============================================================================
+// test_replace_rule — apply one rule to user-supplied text and return match
+// metadata (count, first_match_range, error).
+// ============================================================================
+
+#[tauri::command]
+pub async fn test_replace_rule(
+    rule: ReplaceRule,
+    text: String,
+) -> ApiResponse<RuleMatchMeta> {
+    ApiResponse::success(crate::controllers::replace_rule::test_rule(&rule, &text))
+}
+
+// ============================================================================
+// Bulk inserts — back the bulk-import flows with a single transaction.
+// ============================================================================
+
+#[tauri::command]
+pub async fn insert_book_sources(
+    app_handle: tauri::AppHandle,
+    sources: Vec<BookSource>,
+) -> ApiResponse<usize> {
+    db_op(app_handle, move |conn| {
+        crate::controllers::book_source::insert_many(conn, &sources)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn insert_replace_rules(
+    app_handle: tauri::AppHandle,
+    rules: Vec<ReplaceRule>,
+) -> ApiResponse<usize> {
+    db_op(app_handle, move |conn| {
+        crate::controllers::replace_rule::insert_many(conn, &rules)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn insert_rss_sources(
+    app_handle: tauri::AppHandle,
+    sources: Vec<RssSource>,
+) -> ApiResponse<usize> {
+    db_op(app_handle, move |conn| {
+        crate::controllers::rss_source::insert_many(conn, &sources)
+    })
+    .await
+}
+
+// ============================================================================
+// HttpServerAuth commands — store / inspect / clear the built-in HTTP
+// server's Basic Auth credentials.
+// ============================================================================
+
+#[tauri::command]
+pub async fn get_http_server_auth(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<Option<HttpServerAuthView>> {
+    db_op(app_handle, |conn| {
+        Ok(crate::controllers::http_server_auth::get(conn)?
+            .as_ref()
+            .map(HttpServerAuthView::from))
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_http_server_credentials(
+    app_handle: tauri::AppHandle,
+    username: String,
+    password: String,
+) -> ApiResponse<()> {
+    if username.is_empty() || password.is_empty() {
+        return ApiResponse::error("用户名和密码均不能为空".to_string());
+    }
+    db_op(app_handle, move |conn| {
+        crate::controllers::http_server_auth::set(conn, &username, &password)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn clear_http_server_credentials(
+    app_handle: tauri::AppHandle,
+) -> ApiResponse<()> {
+    db_op(app_handle, |conn| crate::controllers::http_server_auth::clear(conn)).await
 }
 
 #[cfg(test)]

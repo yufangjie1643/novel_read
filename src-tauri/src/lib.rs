@@ -1,5 +1,7 @@
 pub mod book_source;
 pub mod commands;
+pub mod content_processor;
+pub mod controllers;
 #[allow(invalid_reference_casting)]
 pub mod db;
 pub mod http;
@@ -41,6 +43,7 @@ pub fn run() {
             add_book,
             update_book,
             delete_book,
+            save_book_progress,
             clear_book_cache,
             migrate_book_source,
             // BookSource commands
@@ -70,6 +73,8 @@ pub fn run() {
             add_replace_rule,
             update_replace_rule,
             delete_replace_rule,
+            test_replace_rule,
+            insert_replace_rules,
             // SearchKeyword commands
             add_search_keyword,
             get_search_keywords,
@@ -98,9 +103,11 @@ pub fn run() {
             delete_http_tts,
             // RssSource commands
             get_rss_sources,
+            get_rss_source,
             add_rss_source,
             update_rss_source,
             delete_rss_source,
+            insert_rss_sources,
             // RssArticle commands
             get_rss_articles,
             add_rss_articles,
@@ -173,12 +180,17 @@ pub fn run() {
             // Source import commands
             import_source_from_url,
             import_source_from_json,
+            insert_book_sources,
             import_rss_source_from_url,
             import_rss_source_from_json,
             import_replace_rules_from_url,
             import_replace_rules_from_json,
             import_http_tts_from_url,
             import_http_tts_from_json,
+            // HttpServerAuth commands
+            get_http_server_auth,
+            set_http_server_credentials,
+            clear_http_server_credentials,
             // WebDAV commands
             test_webdav_connection,
             backup_to_webdav,

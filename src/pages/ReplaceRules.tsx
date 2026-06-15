@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
-import type { ApiResponse, ReplaceRule } from '../types';
+import type { ApiResponse, ReplaceRule, RuleMatchMeta } from '../types';
 
 export default function ReplaceRules() {
   const { t } = useTranslation();
@@ -17,10 +17,42 @@ export default function ReplaceRules() {
   const [enabled, setEnabled] = useState(true);
   const [order, setOrder] = useState(0);
 
+  const [testText, setTestText] = useState('');
+  const [testResult, setTestResult] = useState<RuleMatchMeta | null>(null);
+
   useEffect(() => {
     loadRules();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-run `test_replace_rule` whenever the rule fields or test text change.
+  // Skips silently when pattern is empty.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!pattern) {
+        setTestResult(null);
+        return;
+      }
+      const rule: ReplaceRule = {
+        id: editingId,
+        name: name.trim() || undefined,
+        pattern,
+        replacement: replacement || undefined,
+        scope: scope.trim() || undefined,
+        is_regex: isRegex,
+        enabled,
+        order,
+      };
+      invoke<ApiResponse<RuleMatchMeta>>('test_replace_rule', { rule, text: testText })
+        .then((resp) => {
+          if (resp.success && resp.data) setTestResult(resp.data);
+        })
+        .catch(() => {
+          // Swallow — UI shows the last good result.
+        });
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [pattern, replacement, isRegex, testText, name, scope, enabled, order, editingId]);
 
   async function loadRules() {
     try {
@@ -318,6 +350,66 @@ export default function ReplaceRules() {
             </button>
           )}
         </div>
+      </div>
+
+      {/* Test panel — live preview of the current rule applied to user text */}
+      <div
+        style={{
+          background: '#fff',
+          borderRadius: 12,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
+          padding: 20,
+          marginBottom: 24,
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a2e', marginBottom: 10 }}>
+          {t('replaceRules.testTitle', { defaultValue: '规则测试' })}
+        </div>
+        <textarea
+          value={testText}
+          onChange={(e) => setTestText(e.target.value)}
+          placeholder={t('replaceRules.testPlaceholder', { defaultValue: '输入测试文本，查看当前规则的替换效果' })}
+          rows={4}
+          style={{
+            ...inputStyle,
+            fontFamily: 'monospace',
+            resize: 'vertical',
+            minHeight: 60,
+          }}
+        />
+        {testResult && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12, color: testResult.error ? '#c62828' : '#555', marginBottom: 6 }}>
+              {testResult.error ? (
+                <span>{testResult.error}</span>
+              ) : testResult.matched ? (
+                <span>
+                  {t('replaceRules.testMatched', {
+                    defaultValue: '匹配 {{count}} 处',
+                    count: testResult.match_count,
+                  })}
+                </span>
+              ) : (
+                <span>{t('replaceRules.testNoMatch', { defaultValue: '无匹配' })}</span>
+              )}
+            </div>
+            <pre
+              style={{
+                background: '#f5f7fa',
+                padding: 10,
+                borderRadius: 6,
+                fontFamily: 'monospace',
+                fontSize: 13,
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                margin: 0,
+                color: '#333',
+              }}
+            >
+              {testResult.result || '(空)'}
+            </pre>
+          </div>
+        )}
       </div>
 
       {/* List */}

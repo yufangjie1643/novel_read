@@ -131,6 +131,27 @@ export interface ReplaceRule {
   order: number;
 }
 
+export interface RuleMatchMeta {
+  matched: boolean;
+  match_count: number;
+  result: string;
+  first_match_range?: [number, number] | null;
+  error?: string | null;
+}
+
+export interface BookProgress {
+  book_url: string;
+  dur_chapter_index: number;
+  dur_chapter_pos: number;
+  dur_chapter_time: number;
+  dur_chapter_title?: string | null;
+}
+
+export interface HttpServerAuthView {
+  username: string;
+  updated_at: number;
+}
+
 export interface SearchKeyword {
   id?: number;
   keyword: string;

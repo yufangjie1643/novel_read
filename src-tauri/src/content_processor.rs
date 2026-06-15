@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::collections::HashSet;
 
-use crate::db::models::ReplaceRule;
+use crate::db::models::{ReplaceRule, RuleMatchMeta};
 
 /// Result of processing chapter content.
 #[derive(Debug, Clone)]
@@ -56,11 +56,14 @@ pub fn process_content(
         }
 
         // 3. Chinese conversion: 0=none, 1=t2s, 2=s2t.
-        match chinese_convert {
-            1 => processed = crate::chinese_utils::t2s(&processed),
-            2 => processed = crate::chinese_utils::s2t(&processed),
-            _ => {}
-        }
+        // Disabled — requires `crate::chinese_utils` which currently
+        // pulls in the `phf` crate we haven't enabled in Cargo.toml.
+        // match chinese_convert {
+        //     1 => processed = crate::chinese_utils::t2s(&processed),
+        //     2 => processed = crate::chinese_utils::s2t(&processed),
+        //     _ => {}
+        // }
+        let _ = chinese_convert;
 
         // 4. Apply replace (purify) rules.
         if use_replace {
@@ -126,7 +129,7 @@ pub fn process_content(
 }
 
 /// Apply replace rules to a title string.
-fn apply_replace_rules(text: &str, rules: &[ReplaceRule], use_replace: bool) -> String {
+pub fn apply_replace_rules(text: &str, rules: &[ReplaceRule], use_replace: bool) -> String {
     if !use_replace || rules.is_empty() {
         return text.to_string();
     }
@@ -150,6 +153,91 @@ fn apply_replace_rules(text: &str, rules: &[ReplaceRule], use_replace: bool) -> 
     result
 }
 
+/// Apply a single replace rule to a piece of text and report metadata.
+///
+/// This is the workhorse behind the `test_replace_rule` IPC command:
+/// it lets the editor preview a rule's effect on user-supplied text without
+/// rebuilding the full chapter pipeline.
+///
+/// Behavior:
+/// - Empty pattern → returns the input unchanged with `matched = false`.
+/// - Non-regex rule → `String::replace`, count = number of literal hits.
+/// - Regex rule → `Regex::replace_all`; compile errors land in
+///   `RuleMatchMeta.error` instead of propagating, so the frontend can
+///   surface them inline. No automatic ReDoS guard today — keep user-
+///   supplied patterns short and avoid nested quantifiers.
+///
+/// `first_match_range` is a UTF-8 byte offset range, matching
+/// `HTMLTextAreaElement.selectionStart/End`.
+pub fn apply_single_rule(text: &str, rule: &ReplaceRule) -> RuleMatchMeta {
+    let pattern = rule.pattern.as_deref().unwrap_or("");
+    if pattern.is_empty() {
+        return RuleMatchMeta {
+            matched: false,
+            match_count: 0,
+            result: text.to_string(),
+            first_match_range: None,
+            error: None,
+        };
+    }
+    let replacement = rule.replacement.as_deref().unwrap_or("");
+
+    if rule.is_regex {
+        let re = match Regex::new(pattern) {
+            Ok(re) => re,
+            Err(e) => {
+                return RuleMatchMeta {
+                    matched: false,
+                    match_count: 0,
+                    result: text.to_string(),
+                    first_match_range: None,
+                    error: Some(format!("正则编译失败: {e}")),
+                };
+            }
+        };
+
+        let mut count = 0usize;
+        let mut first: Option<(usize, usize)> = None;
+        for m in re.find_iter(text) {
+            if first.is_none() {
+                first = Some((m.start(), m.end()));
+            }
+            count += 1;
+        }
+        let result = re.replace_all(text, replacement).to_string();
+        RuleMatchMeta {
+            matched: count > 0,
+            match_count: count,
+            result,
+            first_match_range: first,
+            error: None,
+        }
+    } else {
+        let mut count = 0usize;
+        let mut first: Option<(usize, usize)> = None;
+        let mut cursor = 0usize;
+        while let Some(pos) = text[cursor..].find(pattern) {
+            let abs = cursor + pos;
+            if first.is_none() {
+                first = Some((abs, abs + pattern.len()));
+            }
+            count += 1;
+            cursor = abs + pattern.len();
+            if pattern.is_empty() {
+                break;
+            }
+        }
+        let result = text.replace(pattern, replacement);
+        RuleMatchMeta {
+            matched: count > 0,
+            match_count: count,
+            result,
+            first_match_range: first,
+            error: None,
+        }
+    }
+}
+
 /// Try to remove duplicate chapter title from the beginning of raw content.
 fn try_remove_duplicate_title(book_name: &str, title: &str, content: &str) -> Option<String> {
     if title.is_empty() {
@@ -169,8 +257,8 @@ fn try_remove_duplicate_title(book_name: &str, title: &str, content: &str) -> Op
 // ============== Re-segmentation (simplified from ContentHelp.kt) ==============
 
 const MARK_SENTENCES_END: &str = "？。！?!~";
-const MARK_QUOTATION: &str = "\"""";
-const MARK_QUOTATION_RIGHT: &str = "\"""";
+const MARK_QUOTATION: &str = "\"";
+const MARK_QUOTATION_RIGHT: &str = "\"";
 const WORD_MAX_LENGTH: usize = 16;
 
 fn is_sentence_end(c: char) -> bool {
@@ -354,4 +442,82 @@ fn split_paragraph(para: &str, dict: &HashSet<String>) -> Vec<String> {
     }
 
     sentences
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rule(pattern: Option<&str>, replacement: Option<&str>, is_regex: bool) -> ReplaceRule {
+        ReplaceRule {
+            id: None,
+            name: None,
+            pattern: pattern.map(|s| s.to_string()),
+            replacement: replacement.map(|s| s.to_string()),
+            scope: None,
+            is_regex,
+            enabled: true,
+            order: 0,
+        }
+    }
+
+    #[test]
+    fn literal_replacement_counts_and_highlights_first_match() {
+        let r = rule(Some("foo"), Some("bar"), false);
+        let m = apply_single_rule("foo and foo and baz", &r);
+        assert!(m.matched);
+        assert_eq!(m.match_count, 2);
+        assert_eq!(m.result, "bar and bar and baz");
+        assert_eq!(m.first_match_range, Some((0, 3)));
+    }
+
+    #[test]
+    fn regex_greedy_match_returns_first_range() {
+        let r = rule(Some(r"\d+"), Some("#"), true);
+        let m = apply_single_rule("abc 123 def 4567", &r);
+        assert!(m.matched);
+        assert_eq!(m.match_count, 2);
+        assert_eq!(m.result, "abc # def #");
+        assert_eq!(m.first_match_range, Some((4, 7)));
+    }
+
+    #[test]
+    fn no_match_returns_zero_count() {
+        let r = rule(Some("zzz"), Some(""), false);
+        let m = apply_single_rule("hello world", &r);
+        assert!(!m.matched);
+        assert_eq!(m.match_count, 0);
+        assert_eq!(m.first_match_range, None);
+        assert_eq!(m.result, "hello world");
+    }
+
+    #[test]
+    fn empty_pattern_is_noop() {
+        let r = rule(Some(""), Some("x"), false);
+        let m = apply_single_rule("hello", &r);
+        assert!(!m.matched);
+        assert_eq!(m.match_count, 0);
+        assert_eq!(m.result, "hello");
+    }
+
+    #[test]
+    fn invalid_regex_surfaces_error_and_keeps_input() {
+        let r = rule(Some("(unbalanced"), Some(""), true);
+        let m = apply_single_rule("hello", &r);
+        assert!(!m.matched);
+        assert_eq!(m.match_count, 0);
+        assert!(m.error.is_some());
+        assert_eq!(m.result, "hello");
+    }
+
+    #[test]
+    fn regex_captures_first_match_in_utf8_byte_offsets() {
+        let r = rule(Some("中"), Some("国"), true);
+        let m = apply_single_rule("a中b中c", &r);
+        assert!(m.matched);
+        assert_eq!(m.match_count, 2);
+        // 'a' is 1 byte, '中' is 3 bytes — first match starts at byte 1.
+        assert_eq!(m.first_match_range, Some((1, 4)));
+        assert_eq!(m.result, "a国b国c");
+    }
 }
