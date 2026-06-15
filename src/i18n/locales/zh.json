@@ -216,7 +216,7 @@
     "bookmarkTitle": "书签标题",
     "bookmarkContent": "书签内容（可选）",
     "bookmarkAdded": "书签已添加",
-    "bookmarkAddFailed": "添加书签失败：{error}",
+    "bookmarkAddFailed": "添加书签失败：{{error}}",
     "copied": "已复制",
     "contextMenu": {
       "copy": "复制",

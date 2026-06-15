@@ -216,7 +216,7 @@
     "bookmarkTitle": "Bookmark Title",
     "bookmarkContent": "Bookmark Content (optional)",
     "bookmarkAdded": "Bookmark added",
-    "bookmarkAddFailed": "Failed to add bookmark: {error}",
+    "bookmarkAddFailed": "Failed to add bookmark: {{error}}",
     "copied": "Copied",
     "contextMenu": {
       "copy": "Copy",
