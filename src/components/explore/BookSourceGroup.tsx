@@ -46,7 +46,7 @@ export function BookSourceGroup({
             onToggle();
           }
         }}
-        {...longPress.onPointerDown}
+        onPointerDown={longPress.onPointerDown}
         onPointerUp={longPress.onPointerUp}
         onPointerCancel={longPress.onPointerCancel}
         onPointerLeave={longPress.onPointerLeave}
