@@ -253,6 +253,17 @@
       "autoLoadNext": "Auto-load Next Chapter",
       "floatingButtons": "Floating Right Buttons",
       "keyboardShortcuts": "Keyboard Shortcuts"
+    },
+    "fullBookSearch": {
+      "title": "Search in Book",
+      "keyword": "Keyword",
+      "search": "Search",
+      "scanning": "Scanning chapters",
+      "noResults": "No matches found",
+      "cancel": "Cancel",
+      "jumpTo": "Jump to here",
+      "matches": "{{count}} match(es)",
+      "chapterScanned": "Scanned {{scanned}}/{{total}} chapters"
     }
   },
   "home": {

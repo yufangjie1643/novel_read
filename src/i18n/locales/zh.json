@@ -253,6 +253,17 @@
       "autoLoadNext": "章末自动加载下一章",
       "floatingButtons": "右侧浮动按钮",
       "keyboardShortcuts": "键盘快捷键"
+    },
+    "fullBookSearch": {
+      "title": "全书搜索",
+      "keyword": "搜索关键字",
+      "search": "搜索",
+      "scanning": "正在扫描章节",
+      "noResults": "未找到匹配",
+      "cancel": "取消搜索",
+      "jumpTo": "跳转到此处",
+      "matches": "{{count}} 处匹配",
+      "chapterScanned": "已扫描 {{scanned}}/{{total}} 章"
     }
   },
   "home": {
