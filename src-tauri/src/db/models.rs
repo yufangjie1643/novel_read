@@ -595,3 +595,65 @@ pub struct RssReadRecord {
     pub origin: String,
     pub article_id: i32,
 }
+
+// ============================================================================
+// BookProgressSync
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BookProgressSync {
+    pub book_url: String,
+    pub last_local_time: i64,
+    pub last_remote_time: i64,
+    pub last_synced_at: i64,
+    pub remote_etag: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BookProgressSnapshot {
+    pub schema_version: i32,
+    pub book_url: String,
+    pub book_name: String,
+    pub chapter_index: i32,
+    pub chapter_pos: i32,
+    pub chapter_title: String,
+    pub chapter_time: i64,
+    pub read_time: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SyncDirection {
+    Upload,
+    Download,
+    Auto,
+}
+
+impl Default for SyncDirection {
+    fn default() -> Self {
+        SyncDirection::Auto
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SyncBookProgressResult {
+    Uploaded {
+        book_url: String,
+        local_time: i64,
+        remote_time: i64,
+    },
+    Downloaded {
+        book_url: String,
+        local_time: i64,
+        remote_time: i64,
+    },
+    Skipped {
+        book_url: String,
+        reason: String,
+    },
+    Failed {
+        book_url: String,
+        error: String,
+    },
+}
