@@ -218,6 +218,14 @@
     "bookmarkAdded": "书签已添加",
     "bookmarkAddFailed": "添加书签失败：{{error}}",
     "copied": "已复制",
+    "sync": {
+      "title": "云端进度",
+      "uploaded": "进度已上传",
+      "downloaded": "进度已下载",
+      "skipped": "无需同步",
+      "failed": "同步失败：{{error}}",
+      "syncNow": "立即同步"
+    },
     "contextMenu": {
       "copy": "复制",
       "addBookmark": "添加书签",

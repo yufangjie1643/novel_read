@@ -218,6 +218,14 @@
     "bookmarkAdded": "Bookmark added",
     "bookmarkAddFailed": "Failed to add bookmark: {{error}}",
     "copied": "Copied",
+    "sync": {
+      "title": "Cloud Progress",
+      "uploaded": "Progress uploaded",
+      "downloaded": "Progress downloaded",
+      "skipped": "Already in sync",
+      "failed": "Sync failed: {{error}}",
+      "syncNow": "Sync now"
+    },
     "contextMenu": {
       "copy": "Copy",
       "addBookmark": "Add Bookmark",
