@@ -183,6 +183,8 @@ pub fn run() {
             test_webdav_connection,
             backup_to_webdav,
             restore_from_webdav,
+            sync_book_progress,
+            get_book_sync_status,
             // Search supervisor commands
             search_books_stream_v2,
             cancel_search,
