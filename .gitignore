@@ -86,6 +86,9 @@ probe_cm_output.txt
 agent-skills/
 adb-apk-debug-workflow/
 
+# Git worktrees created for isolated development
+.worktrees/
+
 # ---------- Editors / IDEs ----------
 .idea/
 .vscode/
