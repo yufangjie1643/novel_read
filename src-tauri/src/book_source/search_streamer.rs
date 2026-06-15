@@ -57,6 +57,19 @@ pub enum SearchEvent {
         total_results: usize,
         duration_ms: u64,
     },
+    /// Periodic progress snapshot. Emitted by the dispatcher after
+    /// each per-source state transition (Started/Finished/Failed).
+    /// `running` is the in-flight count, `ok` and `failed` are
+    /// cumulative. The frontend renders the 3-segment bar from this
+    /// event alone — it does NOT need to reduce over individual
+    /// status events.
+    Progress {
+        request_id: String,
+        running: usize,
+        ok: usize,
+        failed: usize,
+        total: usize,
+    },
 }
 
 pub trait SearchSink: Send + Sync {

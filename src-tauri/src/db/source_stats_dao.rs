@@ -40,6 +40,29 @@ pub struct SourceStats {
     pub rolling_success_count: i64,
     pub rolling_total_count: i64,
     pub health_score: f64,
+    // Per-operation health: tells the user *which stage* of a source
+    // pipeline is broken (search, explore, chapter list, chapter
+    // content), not just a single number.
+    pub search_ok: i64,
+    pub search_err: i64,
+    pub search_timeout: i64,
+    pub last_search_error: Option<String>,
+    pub last_search_at: Option<i64>,
+    pub explore_ok: i64,
+    pub explore_err: i64,
+    pub explore_timeout: i64,
+    pub last_explore_error: Option<String>,
+    pub last_explore_at: Option<i64>,
+    pub chapter_list_ok: i64,
+    pub chapter_list_err: i64,
+    pub chapter_list_timeout: i64,
+    pub last_chapter_list_error: Option<String>,
+    pub last_chapter_list_at: Option<i64>,
+    pub chapter_content_ok: i64,
+    pub chapter_content_err: i64,
+    pub chapter_content_timeout: i64,
+    pub last_chapter_content_error: Option<String>,
+    pub last_chapter_content_at: Option<i64>,
 }
 
 impl Default for SourceStats {
@@ -58,6 +81,79 @@ impl Default for SourceStats {
             rolling_success_count: 0,
             rolling_total_count: 0,
             health_score: 1.0,
+            search_ok: 0,
+            search_err: 0,
+            search_timeout: 0,
+            last_search_error: None,
+            last_search_at: None,
+            explore_ok: 0,
+            explore_err: 0,
+            explore_timeout: 0,
+            last_explore_error: None,
+            last_explore_at: None,
+            chapter_list_ok: 0,
+            chapter_list_err: 0,
+            chapter_list_timeout: 0,
+            last_chapter_list_error: None,
+            last_chapter_list_at: None,
+            chapter_content_ok: 0,
+            chapter_content_err: 0,
+            chapter_content_timeout: 0,
+            last_chapter_content_error: None,
+            last_chapter_content_at: None,
+        }
+    }
+}
+
+/// Per-operation bucket for `SourceStatsDao::record_op_*` calls. The
+/// matching columns are updated atomically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpKind {
+    Search,
+    Explore,
+    ChapterList,
+    ChapterContent,
+}
+
+impl OpKind {
+    fn ok_col(self) -> &'static str {
+        match self {
+            OpKind::Search => "search_ok",
+            OpKind::Explore => "explore_ok",
+            OpKind::ChapterList => "chapter_list_ok",
+            OpKind::ChapterContent => "chapter_content_ok",
+        }
+    }
+    fn err_col(self) -> &'static str {
+        match self {
+            OpKind::Search => "search_err",
+            OpKind::Explore => "explore_err",
+            OpKind::ChapterList => "chapter_list_err",
+            OpKind::ChapterContent => "chapter_content_err",
+        }
+    }
+    fn timeout_col(self) -> &'static str {
+        match self {
+            OpKind::Search => "search_timeout",
+            OpKind::Explore => "explore_timeout",
+            OpKind::ChapterList => "chapter_list_timeout",
+            OpKind::ChapterContent => "chapter_content_timeout",
+        }
+    }
+    fn last_err_col(self) -> &'static str {
+        match self {
+            OpKind::Search => "last_search_error",
+            OpKind::Explore => "last_explore_error",
+            OpKind::ChapterList => "last_chapter_list_error",
+            OpKind::ChapterContent => "last_chapter_content_error",
+        }
+    }
+    fn last_at_col(self) -> &'static str {
+        match self {
+            OpKind::Search => "last_search_at",
+            OpKind::Explore => "last_explore_at",
+            OpKind::ChapterList => "last_chapter_list_at",
+            OpKind::ChapterContent => "last_chapter_content_at",
         }
     }
 }
@@ -132,6 +228,55 @@ pub struct SourceStatsDao {
     pool: AppPool,
 }
 
+/// Column list shared by `get_all` and `get_by_url` so the row mapper
+/// and the SELECT stay in sync.
+const STATS_COLUMNS: &str = "sourceUrl, total_queries, successful_queries, timed_out_queries,\
+     errored_queries, total_latency_ms, last_success_at, last_error_at,\
+     last_error_message, last_checked_at, rolling_success_count,\
+     rolling_total_count, health_score,\
+     search_ok, search_err, search_timeout, last_search_error, last_search_at,\
+     explore_ok, explore_err, explore_timeout, last_explore_error, last_explore_at,\
+     chapter_list_ok, chapter_list_err, chapter_list_timeout, last_chapter_list_error, last_chapter_list_at,\
+     chapter_content_ok, chapter_content_err, chapter_content_timeout, last_chapter_content_error, last_chapter_content_at";
+
+fn map_stats_row(row: &rusqlite::Row) -> rusqlite::Result<SourceStats> {
+    Ok(SourceStats {
+        source_url: row.get(0)?,
+        total_queries: row.get(1)?,
+        successful_queries: row.get(2)?,
+        timed_out_queries: row.get(3)?,
+        errored_queries: row.get(4)?,
+        total_latency_ms: row.get(5)?,
+        last_success_at: row.get(6)?,
+        last_error_at: row.get(7)?,
+        last_error_message: row.get(8)?,
+        last_checked_at: row.get(9)?,
+        rolling_success_count: row.get(10)?,
+        rolling_total_count: row.get(11)?,
+        health_score: row.get(12)?,
+        search_ok: row.get(13)?,
+        search_err: row.get(14)?,
+        search_timeout: row.get(15)?,
+        last_search_error: row.get(16)?,
+        last_search_at: row.get(17)?,
+        explore_ok: row.get(18)?,
+        explore_err: row.get(19)?,
+        explore_timeout: row.get(20)?,
+        last_explore_error: row.get(21)?,
+        last_explore_at: row.get(22)?,
+        chapter_list_ok: row.get(23)?,
+        chapter_list_err: row.get(24)?,
+        chapter_list_timeout: row.get(25)?,
+        last_chapter_list_error: row.get(26)?,
+        last_chapter_list_at: row.get(27)?,
+        chapter_content_ok: row.get(28)?,
+        chapter_content_err: row.get(29)?,
+        chapter_content_timeout: row.get(30)?,
+        last_chapter_content_error: row.get(31)?,
+        last_chapter_content_at: row.get(32)?,
+    })
+}
+
 impl SourceStatsDao {
     pub fn new(pool: AppPool) -> Self {
         Self { pool }
@@ -144,30 +289,9 @@ impl SourceStatsDao {
             .await
             .map_err(pool_err_to_rusqlite)?;
         obj.interact(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT sourceUrl, total_queries, successful_queries, timed_out_queries,
-                        errored_queries, total_latency_ms, last_success_at, last_error_at,
-                        last_error_message, last_checked_at, rolling_success_count,
-                        rolling_total_count, health_score
-                 FROM source_stats ORDER BY health_score DESC",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok(SourceStats {
-                    source_url: row.get(0)?,
-                    total_queries: row.get(1)?,
-                    successful_queries: row.get(2)?,
-                    timed_out_queries: row.get(3)?,
-                    errored_queries: row.get(4)?,
-                    total_latency_ms: row.get(5)?,
-                    last_success_at: row.get(6)?,
-                    last_error_at: row.get(7)?,
-                    last_error_message: row.get(8)?,
-                    last_checked_at: row.get(9)?,
-                    rolling_success_count: row.get(10)?,
-                    rolling_total_count: row.get(11)?,
-                    health_score: row.get(12)?,
-                })
-            })?;
+            let sql = format!("SELECT {} FROM source_stats ORDER BY health_score DESC", STATS_COLUMNS);
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map([], map_stats_row)?;
             let mut out = Vec::new();
             for r in rows {
                 out.push(r?);
@@ -186,32 +310,8 @@ impl SourceStatsDao {
             .await
             .map_err(pool_err_to_rusqlite)?;
         obj.interact(move |conn| {
-            conn.query_row(
-                "SELECT sourceUrl, total_queries, successful_queries, timed_out_queries,
-                        errored_queries, total_latency_ms, last_success_at, last_error_at,
-                        last_error_message, last_checked_at, rolling_success_count,
-                        rolling_total_count, health_score
-                 FROM source_stats WHERE sourceUrl = ?1",
-                params![url],
-                |row| {
-                    Ok(SourceStats {
-                        source_url: row.get(0)?,
-                        total_queries: row.get(1)?,
-                        successful_queries: row.get(2)?,
-                        timed_out_queries: row.get(3)?,
-                        errored_queries: row.get(4)?,
-                        total_latency_ms: row.get(5)?,
-                        last_success_at: row.get(6)?,
-                        last_error_at: row.get(7)?,
-                        last_error_message: row.get(8)?,
-                        last_checked_at: row.get(9)?,
-                        rolling_success_count: row.get(10)?,
-                        rolling_total_count: row.get(11)?,
-                        health_score: row.get(12)?,
-                    })
-                },
-            )
-            .optional()
+            let sql = format!("SELECT {} FROM source_stats WHERE sourceUrl = ?1", STATS_COLUMNS);
+            conn.query_row(&sql, params![url], map_stats_row).optional()
         })
         .await
         .map_err(interact_err_to_rusqlite)?
@@ -336,6 +436,162 @@ impl SourceStatsDao {
         })
         .await
         .map_err(interact_err_to_rusqlite)?
+    }
+
+    // ----------------------------------------------------------------
+    // Per-operation recording
+    // ----------------------------------------------------------------
+
+    /// Record a successful outcome for a specific operation. Updates
+    /// the matching `*_ok` counter, the `last_*_at` timestamp, and
+    /// recomputes the global `health_score`.
+    pub async fn record_op_success(
+        &self,
+        op: OpKind,
+        source_url: &str,
+        latency_ms: u64,
+    ) -> rusqlite::Result<()> {
+        self.record_op(op, source_url, true, None, Some(latency_ms))
+            .await
+    }
+
+    /// Record a failed outcome for a specific operation. Updates the
+    /// matching `*_err` counter and stores the error message in
+    /// `last_*_error` and the timestamp in `last_*_at`.
+    pub async fn record_op_error(
+        &self,
+        op: OpKind,
+        source_url: &str,
+        err_msg: &str,
+        latency_ms: u64,
+    ) -> rusqlite::Result<()> {
+        self.record_op(op, source_url, false, Some(err_msg), Some(latency_ms))
+            .await
+    }
+
+    /// Record a timeout for a specific operation.
+    pub async fn record_op_timeout(
+        &self,
+        op: OpKind,
+        source_url: &str,
+        latency_ms: u64,
+    ) -> rusqlite::Result<()> {
+        self.record_op(op, source_url, false, Some("timeout"), Some(latency_ms))
+            .await
+    }
+
+    async fn record_op(
+        &self,
+        op: OpKind,
+        source_url: &str,
+        success: bool,
+        err_msg: Option<&str>,
+        latency_ms: Option<u64>,
+    ) -> rusqlite::Result<()> {
+        let url = source_url.to_string();
+        let err_msg_owned = err_msg.map(|s| s.to_string());
+        let op_ok = op.ok_col().to_string();
+        let op_err = op.err_col().to_string();
+        let op_timeout = op.timeout_col().to_string();
+        let op_last_err = op.last_err_col().to_string();
+        let op_last_at = op.last_at_col().to_string();
+        let obj = self
+            .pool
+            .get()
+            .await
+            .map_err(pool_err_to_rusqlite)?;
+        let now = chrono::Utc::now().timestamp();
+        let latency = latency_ms.unwrap_or(0) as i64;
+        let is_timeout = err_msg_owned.as_deref() == Some("timeout");
+        let global_inc = if is_timeout {
+            "timed_out_queries = timed_out_queries + 1"
+        } else {
+            "errored_queries = errored_queries + 1"
+        };
+        let op_inc = if is_timeout {
+            op_timeout.clone()
+        } else {
+            op_err.clone()
+        };
+        // Move strings into the closure.
+        let url_in = url.clone();
+        let err_msg_in = err_msg_owned.clone();
+        let _ = obj
+            .interact(move |conn| {
+                let tx = conn.transaction()?;
+                // Ensure the row exists.
+                tx.execute(
+                    "INSERT INTO source_stats (sourceUrl, last_checked_at) VALUES (?1, ?2)
+                     ON CONFLICT(sourceUrl) DO UPDATE SET last_checked_at = excluded.last_checked_at",
+                    params![url_in, now],
+                )?;
+                let op_ok_s = op_ok.clone();
+                let op_inc_s = op_inc.clone();
+                let op_last_err_s = op_last_err.clone();
+                let op_last_at_s = op_last_at.clone();
+                let global_inc_s = global_inc.to_string();
+                let url_s = url_in.clone();
+                let err_msg_s = err_msg_in.clone();
+                // Build the SQL via string concatenation to avoid format!
+                // placeholder collisions.
+                let sql = if success {
+                    let mut s = String::from(
+                        "UPDATE source_stats SET
+                            total_queries = total_queries + 1,
+                            successful_queries = successful_queries + 1,
+                            total_latency_ms = total_latency_ms + ?2,
+                            last_success_at = ?3,
+                            rolling_success_count = rolling_success_count + 1,
+                            rolling_total_count = rolling_total_count + 1, ",
+                    );
+                    s.push_str(&op_ok_s);
+                    s.push_str(" = ");
+                    s.push_str(&op_ok_s);
+                    s.push_str(" + 1, ");
+                    s.push_str(&op_last_at_s);
+                    s.push_str(" = ?3 WHERE sourceUrl = ?1");
+                    s
+                } else {
+                    let mut s = String::from(
+                        "UPDATE source_stats SET
+                            total_queries = total_queries + 1,
+                            total_latency_ms = total_latency_ms + ?2,
+                            last_error_at = ?3,
+                            last_error_message = ?4,
+                            rolling_total_count = rolling_total_count + 1, ",
+                    );
+                    s.push_str(&global_inc_s);
+                    s.push_str(", ");
+                    s.push_str(&op_inc_s);
+                    s.push_str(" = ");
+                    s.push_str(&op_inc_s);
+                    s.push_str(" + 1, ");
+                    s.push_str(&op_last_at_s);
+                    s.push_str(" = ?3, ");
+                    s.push_str(&op_last_err_s);
+                    s.push_str(" = ?4 WHERE sourceUrl = ?1");
+                    s
+                };
+                if success {
+                    tx.execute(&sql, params![url_s, latency, now])?;
+                } else {
+                    tx.execute(
+                        &sql,
+                        params![url_s, latency, now, err_msg_s.unwrap_or_default()],
+                    )?;
+                }
+                prune_rolling_window(&tx, &url_s)?;
+                let h = recompute_health_in_tx(&tx, &url_s)?;
+                tx.execute(
+                    "UPDATE source_stats SET health_score = ?2 WHERE sourceUrl = ?1",
+                    params![url_s, h],
+                )?;
+                tx.commit()?;
+                Ok::<_, rusqlite::Error>(())
+            })
+            .await
+            .map_err(interact_err_to_rusqlite)?;
+        Ok(())
     }
 }
 

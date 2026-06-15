@@ -198,7 +198,20 @@ impl RuleExecutor {
 
         // Check if this is a simple CSS selector (no @ chain)
         if !rule.contains('@') {
-            // Treat as simple selector - get text of first match
+            // Legado bare extraction hint — when the rule is a single
+            // word like "text", "html", "tag", or one of the common
+            // HTML attribute names ("href", "src", "id", "class",
+            // "value", "name", "title", "data-*", ...), it applies to
+            // the OUTER element that was already selected by the
+            // chapterList rule, not to a nested sub-selector.
+            //
+            // We detect this by: rule has no whitespace, no `.`, no `#`,
+            // no `>`, no `[`, and matches the known extraction-hint
+            // set. Anything else is a real (possibly invalid) CSS
+            // selector and goes through the normal path.
+            if Self::is_extraction_hint(rule) {
+                return Self::extract_from_root(content, rule);
+            }
             return analyzer.get_string(rule, None);
         }
 
@@ -217,6 +230,10 @@ impl RuleExecutor {
 
         let (selector_str, attr) = match *extract {
             "text" => (css_selector.as_str(), None),
+            "textNodes" => {
+                // Direct text children of the selected element.
+                return analyzer.get_direct_text(&css_selector);
+            }
             "html" => {
                 return analyzer.get_element_html(&css_selector);
             }
@@ -266,6 +283,98 @@ impl RuleExecutor {
         }
     }
 
+    /// Legado bare extraction hint set. A rule that is just one of
+    /// these words (no `@`, no `.`, no `#`, no `[`, no `>`) is a
+    /// directive to extract the corresponding value from the
+    /// currently-selected outer element, NOT a sub-selector.
+    fn is_extraction_hint(rule: &str) -> bool {
+        if rule.is_empty() || rule.contains(' ') || rule.contains('.') || rule.contains('#') {
+            return false;
+        }
+        if rule.contains('[') || rule.contains('>') || rule.contains(':') {
+            return false;
+        }
+        matches!(
+            rule,
+            "text" | "html"
+            | "tag"
+            | "href" | "src"
+            | "id" | "class" | "name" | "value" | "title"
+            | "alt" | "type" | "rel" | "target" | "data-id" | "data-url"
+            | "data-href" | "data-src" | "data-original" | "data-name"
+        )
+    }
+
+    /// Extract a value from the *root element* of `content` (the
+    /// outer element the caller already selected). Used by bare
+    /// extraction hints like `text`, `html`, `href`, etc.
+    ///
+    /// Strategy: walk the children of `body > *` and try each
+    /// candidate element in turn. This handles the common case
+    /// where the chapterList rule matched a wrapping element like
+    /// `<dd>` and the chapter info lives in the first `<a>` child.
+    fn extract_from_root(content: &str, hint: &str) -> Option<String> {
+        use scraper::{Html, Selector};
+        let doc = Html::parse_document(content);
+        let sel = Selector::parse("body > *").ok()?;
+        let outer = doc.select(&sel).next()?;
+        // Collect candidate elements: the outer first, then its
+        // child elements, then the first descendant `<a>`.
+        let mut candidates: Vec<_> = vec![outer];
+        for c in outer.children() {
+            if let Some(el) = scraper::ElementRef::wrap(c) {
+                candidates.push(el);
+            }
+        }
+        if matches!(hint, "text" | "textNodes" | "href" | "src" | "data-url" | "data-href" | "data-id" | "data-original" | "data-name" | "title" | "value" | "name") {
+            // Also try the first descendant <a>, since chapterList
+            // often lands on a wrapper like <dd> and chapter href /
+            // text live on the inner <a>.
+            if let Ok(a_sel) = Selector::parse("a") {
+                if let Some(a) = outer.select(&a_sel).next() {
+                    candidates.push(a);
+                }
+            }
+        }
+        for el in candidates {
+            let result = match hint {
+                "text" => {
+                    let s: String = el.text().collect();
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                }
+                "textNodes" => {
+                    // Walks the full subtree, equivalent to @text.
+                    // Some Legado book-source rules use @textNodes
+                    // for "all the text inside this element,
+                    // paragraphs and all".
+                    let s: String = el.text().collect();
+                    let trimmed = s.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                }
+                "html" => Some(el.inner_html()),
+                "tag" => Some(el.value().name().to_string()),
+                _ => el
+                    .value()
+                    .attr(hint)
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
+            };
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
+    }
+
     /// Apply regex replacement to a string
     fn apply_replace_regex(&self, text: &str, rule: &SourceRule) -> String {
         if let Ok(re) = Regex::new(&rule.replace_regex) {
@@ -301,6 +410,7 @@ impl RuleExecutor {
             RuleMode::Json => JsonAnalyzer::new(content)
                 .map(|analyzer| analyzer.get_value_list(&rule.rule))
                 .unwrap_or_default(),
+            RuleMode::XPath => Vec::new(), // XPath analyzer removed
             _ => Vec::new(),
         }
     }
@@ -446,5 +556,55 @@ mod tests {
         let exec = RuleExecutor::new(state);
         let result = exec.get_string("<js>'hello ' + 'world'</js>", "ignored", None);
         assert_eq!(result, "hello world");
+    }
+
+    const CHAPTER_ROW: &str = r#"<dd> <a style="" href="/45_45541/42470534.html">完结感言</a></dd>"#;
+
+    #[test]
+    fn test_bare_text_hint_extracts_outer_text() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("text", CHAPTER_ROW, None);
+        assert_eq!(result, "完结感言");
+    }
+
+    #[test]
+    fn test_bare_href_hint_falls_through_wrapper_to_inner_anchor() {
+        // The chapter list lands on a `<dd>` wrapper whose only child
+        // is the actual `<a>` link. extract_from_root must descend
+        // into the descendant <a> when the outer element doesn't
+        // itself carry the requested attribute.
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("href", CHAPTER_ROW, None);
+        assert_eq!(result, "/45_45541/42470534.html");
+    }
+
+    #[test]
+    fn test_bare_html_hint_extracts_inner_html() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("html", "<div>hello <b>world</b></div>", None);
+        assert!(result.contains("hello"));
+        assert!(result.contains("world"));
+    }
+
+    #[test]
+    fn test_bare_data_url_hint_extracts_data_attribute() {
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let html = r#"<a data-url="cap1.htm">第1章</a>"#;
+        assert_eq!(exec.get_string("data-url", html, None), "cap1.htm");
+    }
+
+    #[test]
+    fn test_unknown_bare_word_does_not_treat_as_hint() {
+        // A bare word that's NOT in the extraction-hint set should
+        // be treated as a (probably invalid) CSS selector and return
+        // empty — not crash and not spuriously match.
+        let state = JsExtState::new();
+        let exec = RuleExecutor::new(state);
+        let result = exec.get_string("garbage_word", CHAPTER_ROW, None);
+        assert!(result.is_empty() || !result.contains("完结感言"));
     }
 }

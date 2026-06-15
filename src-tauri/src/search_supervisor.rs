@@ -67,8 +67,15 @@ struct ResourceMonitor;
 impl ResourceMonitor {
     /// Spawn the monitor loop on the tokio runtime. The handle is
     /// stored in the supervisor; aborting the handle stops the loop.
-    pub fn start(sup: Arc<SearchSupervisor>) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
+    ///
+    /// Uses `tauri::async_runtime::spawn` instead of `tokio::spawn`
+    /// so the task is enqueued onto Tauri's runtime — Tauri
+    /// constructs its async runtime lazily inside `tauri::Builder`,
+    /// so calling `tokio::spawn` from `setup` (which runs in a
+    /// synchronous context before the runtime is fully wired) panics
+    /// with "there is no reactor running".
+    pub fn start(sup: Arc<SearchSupervisor>) -> tauri::async_runtime::JoinHandle<()> {
+        tauri::async_runtime::spawn(async move {
             use sysinfo::{ProcessRefreshKind, RefreshKind};
             let mut sys = sysinfo::System::new_with_specifics(
                 RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
@@ -149,7 +156,7 @@ pub struct SearchSupervisor {
     pub(crate) current_request: Arc<tokio::sync::Mutex<Option<RequestId>>>,
     /// Tracks the latest resources monitor task so we can abort it on
     /// drop or supervisor replacement. Only one monitor at a time.
-    pub(crate) monitor_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub(crate) monitor_handle: Arc<tokio::sync::Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
     /// App handle, kept for future use (e.g. emitting events from the
     /// resource monitor). `None` in tests where constructing a real
     /// AppHandle is impractical.

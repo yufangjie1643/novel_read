@@ -26,6 +26,7 @@ use crate::server;
 use crate::state::AppState;
 use crate::webdav::WebDavClient;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tauri::ipc::Channel;
 use tauri::State;
 use rusqlite::params;
@@ -34,6 +35,47 @@ use std::io::{Cursor, Read};
 use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 use tauri::{Emitter, Manager};
+
+/// Atomic counters used to emit `SearchEvent::Progress` to the
+/// frontend. Owned by the dispatch loop, cloned into every
+/// per-source task.
+#[derive(Clone)]
+struct ProgressCounters {
+    running: Arc<AtomicUsize>,
+    ok: Arc<AtomicUsize>,
+    failed: Arc<AtomicUsize>,
+    total: usize,
+    request_id: String,
+    sink: Arc<dyn crate::book_source::search_streamer::SearchSink + Send + Sync>,
+}
+
+impl ProgressCounters {
+    fn new(
+        total: usize,
+        request_id: String,
+        sink: Arc<dyn crate::book_source::search_streamer::SearchSink + Send + Sync>,
+    ) -> Self {
+        Self {
+            running: Arc::new(AtomicUsize::new(0)),
+            ok: Arc::new(AtomicUsize::new(0)),
+            failed: Arc::new(AtomicUsize::new(0)),
+            total,
+            request_id,
+            sink,
+        }
+    }
+
+    /// Emit a `SearchEvent::Progress` snapshot with current counts.
+    fn emit(&self) {
+        let _ = self.sink.send(crate::book_source::search_streamer::SearchEvent::Progress {
+            request_id: self.request_id.clone(),
+            running: self.running.load(Ordering::Relaxed),
+            ok: self.ok.load(Ordering::Relaxed),
+            failed: self.failed.load(Ordering::Relaxed),
+            total: self.total,
+        });
+    }
+}
 
 #[derive(Serialize)]
 pub struct ApiResponse<T> {
@@ -3497,6 +3539,14 @@ pub async fn search_books_stream_v2(
         total_sources: sources.len(),
     });
 
+    // Atomic progress counters, cloned into every per-source task.
+    // The frontend reads SearchEvent::Progress to render the 3-segment
+    // bar — it does NOT need to reduce over per-source events.
+    let progress = ProgressCounters::new(sources.len(), request_id.clone(), sink.clone());
+    // Emit initial snapshot (running=0, ok=0, failed=0) so the
+    // frontend's progress bar can render the empty track immediately.
+    progress.emit();
+
     // Spawn each source as its own task. The supervisor does NOT
     // impose a global timeout — we just wait for all sources to
     // complete, which may take a long time on slow networks.
@@ -3512,6 +3562,7 @@ pub async fn search_books_stream_v2(
         let in_flight = sup.in_flight.clone();
         let request_id = request_id_for_map.clone();
         let src_url = src.book_source_url.clone();
+        let progress = progress.clone();
         join_set.spawn(async move {
             let _permit = match sem.acquire().await {
                 Ok(p) => p,
@@ -3542,6 +3593,7 @@ pub async fn search_books_stream_v2(
                 health_by_url,
                 per_source_timeout,
                 rx,
+                progress,
             )
             .await;
             // Remove self from in_flight. We do NOT remove the
@@ -3557,10 +3609,17 @@ pub async fn search_books_stream_v2(
     while join_set.join_next().await.is_some() {}
 
     let duration_ms = started_at.elapsed().as_millis() as u64;
+    let _ = sink.send(SearchEvent::Progress {
+        request_id: request_id.clone(),
+        running: 0,
+        ok: progress.ok.load(Ordering::Relaxed),
+        failed: progress.failed.load(Ordering::Relaxed),
+        total: progress.total,
+    });
     let _ = sink.send(SearchEvent::Done {
         request_id: request_id.clone(),
-        succeeded: 0, // counts are not tracked in v2; the UI shows progress via statuses
-        failed: 0,
+        succeeded: progress.ok.load(Ordering::Relaxed),
+        failed: progress.failed.load(Ordering::Relaxed),
         total_results: 0,
         duration_ms,
     });
@@ -3620,6 +3679,92 @@ pub async fn update_search_settings(
     state.supervisor.update_settings(settings).await
 }
 
+/// Download a remote cover URL to `app_data_dir/covers/<sha1>.bin` and
+/// return the local absolute path. If the file already exists, the
+/// download is skipped (permanent cache).
+///
+/// Returns a `file://`-loadable absolute path. The frontend should
+/// pass it through `convertFileSrc` before assigning to `<img src>`
+/// so the Tauri webview can read it.
+#[tauri::command]
+pub async fn cache_cover(
+    url: String,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    if url.is_empty() {
+        return Err("empty url".to_string());
+    }
+    // Refuse non-http(s) schemes (data:, file:, javascript:, etc).
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!("unsupported scheme: {}", &url[..url.len().min(16)]));
+    }
+
+    let app_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {}", e))?;
+    let covers_dir = app_dir.join("covers");
+    std::fs::create_dir_all(&covers_dir)
+        .map_err(|e| format!("create_dir_all covers: {}", e))?;
+
+    // Hash the URL (not the bytes) so a remote update at the same
+    // URL would replace the cache file in place next time.
+    let hash = {
+        let mut h: u64 = 0xcbf29ce484222325;
+        for b in url.as_bytes() {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        format!("{:016x}", h)
+    };
+    let target = covers_dir.join(format!("{}.bin", hash));
+
+    if !target.exists() {
+        // Cap at 10 MiB to avoid runaway downloads. 10 MiB is plenty
+        // for any book cover (a 2K cover JPEG is ~200 KiB).
+        const MAX_BYTES: u64 = 10 * 1024 * 1024;
+        // Blocking reqwest must not be called from an async context
+        // (it would panic at runtime drop). Run on a blocking thread.
+        let url_for_blocking = url.clone();
+        let target_for_blocking = target.clone();
+        let covers_dir_for_blocking = covers_dir.clone();
+        let hash_for_blocking = hash.clone();
+        let res: Result<(), String> = tokio::task::spawn_blocking(move || {
+            use std::io::Read;
+            let client = crate::http::blocking_client_no_proxy();
+            let resp = client
+                .get(&url_for_blocking)
+                .send()
+                .map_err(|e| {
+                    format!("GET {}: {}", &url_for_blocking[..url_for_blocking.len().min(64)], e)
+                })?;
+            if !resp.status().is_success() {
+                return Err(format!(
+                    "HTTP {} for {}",
+                    resp.status(),
+                    &url_for_blocking[..url_for_blocking.len().min(64)]
+                ));
+            }
+            let mut buf: Vec<u8> = Vec::with_capacity(64 * 1024);
+            let mut limited = resp.take(MAX_BYTES);
+            limited
+                .read_to_end(&mut buf)
+                .map_err(|e| format!("read body: {}", e))?;
+            // Atomic write: tmp file then rename.
+            let tmp = covers_dir_for_blocking.join(format!("{}.bin.tmp", hash_for_blocking));
+            std::fs::write(&tmp, &buf).map_err(|e| format!("write tmp: {}", e))?;
+            std::fs::rename(&tmp, &target_for_blocking)
+                .map_err(|e| format!("rename: {}", e))?;
+            Ok::<_, String>(())
+        })
+        .await
+        .map_err(|e| format!("spawn_blocking: {}", e))?;
+        res?;
+    }
+
+    Ok(target.to_string_lossy().into_owned())
+}
+
 /// Run one source through the supervisor: send SourceStarted, do the
 /// WebBook::search with a per-source timeout, send
 /// SourceFinished/SourceFailed, record stats. Used by both the old
@@ -3632,6 +3777,7 @@ async fn run_one_search_source(
     health_by_url: std::collections::HashMap<String, f64>,
     per_source_timeout: std::time::Duration,
     cancel_rx: tokio::sync::watch::Receiver<bool>,
+    progress: ProgressCounters,
 ) {
     use crate::book_source::js_extensions::JsExtState;
     use crate::book_source::search_streamer::{FailureKind, SearchEvent};
@@ -3641,6 +3787,9 @@ async fn run_one_search_source(
     if *cancel_rx.borrow() {
         return;
     }
+
+    progress.running.fetch_add(1, Ordering::Relaxed);
+    progress.emit();
 
     let _ = sink.send(SearchEvent::SourceStarted {
         source_url: src.book_source_url.clone(),
@@ -3679,6 +3828,7 @@ async fn run_one_search_source(
 
     match outcome {
         Ok(books) if !cancelled => {
+            eprintln!("[stats-trace] ok url={} latency={} books={}", url, latency_ms, books.len());
             let _ = stats.record_op_success(
                 crate::db::source_stats_dao::OpKind::Search,
                 &url,
@@ -3710,9 +3860,13 @@ async fn run_one_search_source(
                 count,
                 latency_ms,
             });
+            progress.running.fetch_sub(1, Ordering::Relaxed);
+            progress.ok.fetch_add(1, Ordering::Relaxed);
+            progress.emit();
         }
         Ok(_) => {
             // Cancelled after we got results — drop them.
+            eprintln!("[stats-trace] cancelled url={} latency={}", url, latency_ms);
             let _ = stats.record_op_timeout(
                 crate::db::source_stats_dao::OpKind::Search,
                 &url,
@@ -3724,8 +3878,12 @@ async fn run_one_search_source(
                 latency_ms,
                 kind: FailureKind::Timeout,
             });
+            progress.running.fetch_sub(1, Ordering::Relaxed);
+            progress.failed.fetch_add(1, Ordering::Relaxed);
+            progress.emit();
         }
         Err((e, kind)) => {
+            eprintln!("[stats-trace] err url={} latency={} kind={:?} err={}", url, latency_ms, kind, e);
             match kind {
                 FailureKind::Timeout => {
                     let _ = stats.record_op_timeout(
@@ -3749,6 +3907,9 @@ async fn run_one_search_source(
                 latency_ms,
                 kind,
             });
+            progress.running.fetch_sub(1, Ordering::Relaxed);
+            progress.failed.fetch_add(1, Ordering::Relaxed);
+            progress.emit();
         }
     }
 }

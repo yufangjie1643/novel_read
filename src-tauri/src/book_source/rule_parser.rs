@@ -107,6 +107,24 @@ impl RuleParser {
     fn parse_single_rule(&self, rule_str: &str) -> SourceRule {
         let mut rule = SourceRule::default();
 
+        // Special case: `##regex##replacement` (no selector). This is
+        // a "regex-only" rule that applies a regex replacement to the
+        // current accumulator (the result of the previous rule in a
+        // `&&` chain). Useful for stripping boilerplate from a
+        // content rule that was just extracted.
+        if let Some(stripped) = rule_str.strip_prefix("##") {
+            let parts: Vec<&str> = stripped.split("##").collect();
+            if !parts.is_empty() && !parts[0].is_empty() {
+                rule.mode = RuleMode::Css;
+                rule.rule = String::new();
+                rule.replace_regex = parts[0].to_string();
+                if parts.len() > 1 {
+                    rule.replacement = parts[1].to_string();
+                }
+                return rule;
+            }
+        }
+
         // Detect mode prefix
         let rest = if rule_str.starts_with("@XPath:") {
             rule.mode = RuleMode::XPath;
@@ -125,6 +143,14 @@ impl RuleParser {
             // XPath starts with /
             rule.mode = RuleMode::XPath;
             rule_str
+        } else if rule_str.starts_with(':') {
+            // Legado/Python-style regex: ":pattern". The leading colon
+            // is dropped, the rest is a regex. A leading "-" after the
+            // colon (":-pattern") means reverse the match list (used
+            // by chapter_list rules to flip old-to-new order); the
+            // executor inspects the raw rule string for that "-".
+            rule.mode = RuleMode::Regex;
+            &rule_str[1..]
         } else if rule_str.starts_with("$.") || rule_str.starts_with("$[") {
             // JSONPath starts with $.
             rule.mode = RuleMode::Json;

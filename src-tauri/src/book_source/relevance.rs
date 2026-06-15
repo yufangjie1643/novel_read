@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ScoreBreakdown {
     /// Rule 0: every unique char in the query is present in the title.
     /// This is the strongest discriminator — a partial substring match

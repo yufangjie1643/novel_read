@@ -17,7 +17,12 @@ impl HtmlAnalyzer {
         }
     }
 
-    /// Get string result from CSS selector
+    /// Get string result from CSS selector. When no attribute is
+    /// requested, returns the element's full text with `<br>` turned
+    /// into newlines and block elements (`<p>`, `<div>`, etc.)
+    /// separated by blank lines — so chapter content comes out with
+    /// visible paragraph breaks. U+00A0 (`&nbsp;`) is normalized
+    /// to a regular space.
     pub fn get_string(&self, selector_str: &str, attr: Option<&str>) -> Option<String> {
         let selector = Selector::parse(selector_str).ok()?;
         let element = self.document.select(&selector).next()?;
@@ -25,7 +30,10 @@ impl HtmlAnalyzer {
         let text = if let Some(attr_name) = attr {
             element.value().attr(attr_name)?.to_string()
         } else {
-            element.text().collect::<String>().trim().to_string()
+            let mut out = String::new();
+            walk_with_breaks(element, &mut out);
+            let raw = collapse_blank_lines(&out);
+            normalize_chapter_text(&raw)
         };
 
         if text.is_empty() {
@@ -72,6 +80,138 @@ impl HtmlAnalyzer {
             .map(|element| element.html())
             .collect()
     }
+
+    /// Get the concatenated text of the first matching element,
+    /// walking the entire subtree and treating `<br>` as a line
+    /// break. Block elements (`<p>`, `<div>`, etc.) get a blank
+    /// line after them so paragraphs come out separated.
+    ///
+    /// Used by the `@text` and `@textNodes` Legado hints.
+    pub fn get_direct_text(&self, selector_str: &str) -> Option<String> {
+        self.get_text_with_breaks(selector_str)
+    }
+
+    /// Get text from the first matching element, with `<br>` treated
+    /// as a line break. Useful for chapter bodies where the source
+    /// uses `<br/><br/>` between paragraphs.
+    ///
+    /// Algorithm: walk the subtree, treating `<br>` as a newline.
+    /// Inline tags (no `<br>`, no block element) get their text
+    /// concatenated. Block elements (`<p>`, `<div>`, `<h1>`-`<h6>`,
+    /// `<li>`, `<tr>`, etc.) get a newline after them. The output is
+    /// then normalized so `&nbsp;` becomes a regular space and runs
+    /// of 3+ spaces are capped at 2 (matching 2em indent).
+    pub fn get_text_with_breaks(&self, selector_str: &str) -> Option<String> {
+        use scraper::Node;
+        let selector = Selector::parse(selector_str).ok()?;
+        let element = self.document.select(&selector).next()?;
+        let mut out = String::new();
+        walk_with_breaks(element, &mut out);
+        let collapsed = collapse_blank_lines(&out);
+        if collapsed.is_empty() {
+            return None;
+        }
+        Some(normalize_chapter_text(&collapsed))
+    }
+}
+
+/// Normalize text extracted from a chapter body:
+/// - `&nbsp;` (U+00A0) → regular space, so it doesn't render as
+///   a visible "weird character" in fonts that distinguish the two.
+/// - `\r\n` and `\r` → `\n`, so line breaks are consistent.
+/// - Multiple consecutive spaces (≥ 3) → 2 spaces, which is what
+///   biquga-style sites use for first-line indentation.
+fn normalize_chapter_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut run_spaces = 0usize;
+    for c in s.chars() {
+        match c {
+            '\r' => {
+                if !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                run_spaces = 0;
+            }
+            ' ' | '\u{00A0}' => {
+                run_spaces += 1;
+                out.push(' ');
+            }
+            _ => {
+                // Cap a trailing run of spaces at 2 (typical 2em
+                // indent). Drop the rest.
+                while run_spaces > 2 {
+                    out.pop();
+                    run_spaces -= 1;
+                }
+                run_spaces = 0;
+                out.push(c);
+            }
+        }
+    }
+    // Also cap trailing spaces at the end.
+    while run_spaces > 2 {
+        out.pop();
+        run_spaces -= 1;
+    }
+    out
+}
+
+/// Walk an element's subtree, appending text to `out` and inserting
+/// newlines for `<br>` and after block-level closing tags so
+/// paragraphs come out separated.
+fn walk_with_breaks(el: scraper::ElementRef, out: &mut String) {
+    let block_tags: &[&str] = &[
+        "p", "div", "h1", "h2", "h3", "h4", "h5", "h6", "li", "tr", "td", "th", "blockquote",
+        "pre", "section", "article", "header", "footer", "aside", "ul", "ol", "table",
+    ];
+    for child in el.children() {
+        match child.value() {
+            scraper::Node::Text(t) => {
+                out.push_str(t);
+            }
+            scraper::Node::Element(e) => {
+                let tag = e.name().to_ascii_lowercase();
+                if tag == "br" {
+                    out.push('\n');
+                    continue;
+                }
+                if let Some(grand) = scraper::ElementRef::wrap(child) {
+                    walk_with_breaks(grand, out);
+                }
+                if block_tags.contains(&tag.as_str()) {
+                    // Ensure paragraphs are separated by at least one
+                    // blank line. We don't add the line break yet
+                    // (might still be inside a containing block);
+                    // collapse_blank_lines takes care of the rest.
+                    if !out.ends_with('\n') {
+                        out.push('\n');
+                    }
+                    out.push('\n');
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collapse runs of three or more `\n` to a single `\n\n` (one blank
+/// line) so paragraph breaks are visible but the text doesn't have
+/// huge gaps.
+fn collapse_blank_lines(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut consecutive_newlines = 0;
+    for ch in s.chars() {
+        if ch == '\n' {
+            consecutive_newlines += 1;
+            if consecutive_newlines <= 2 {
+                out.push('\n');
+            }
+        } else {
+            consecutive_newlines = 0;
+            out.push(ch);
+        }
+    }
+    out.trim_matches('\n').to_string()
 }
 
 /// JSON analyzer (basic JSONPath-like support)
@@ -265,5 +405,44 @@ mod tests {
         let result = analyzer.get_value_string("$.books[0]");
 
         assert!(result.unwrap().contains("Author A"));
+    }
+
+    #[test]
+    fn test_get_text_with_breaks_preserves_paragraphs() {
+        // biquga-style: paragraphs separated by `<br/><br/>`,
+        // with `&nbsp;` for first-line indent.
+        let html = r#"
+            <div id="content">
+                <p>
+                    &nbsp;&nbsp;&nbsp;&nbsp;天才一秒记住本站地址：[爱曲小说]
+                    https://www.biqusa.com/最快更新！<br/><br/>
+                </p>
+                <div id="conter_tip"><b>最新网址：www.biqusa.com</b></div>
+                &nbsp;&nbsp;&nbsp;&nbsp;这里是……哪里？<br/><br/>
+                &nbsp;&nbsp;&nbsp;&nbsp;赵乾坤回过头来的时候，<br/><br/>
+                &nbsp;&nbsp;&nbsp;&nbsp;发现他站在冰天雪地中。
+            </div>
+        "#;
+        let analyzer = HtmlAnalyzer::new(html);
+        // Use plain CSS selector (the function expects CSS, not
+        // Legado shorthand — callers in the rule executor convert
+        // first).
+        let text = analyzer.get_text_with_breaks("#content").unwrap();
+        // Newlines are present (paragraph breaks).
+        assert!(text.contains('\n'), "expected newlines, got: {text}");
+        // &nbsp; (U+00A0) is normalized to a regular space.
+        assert!(!text.contains('\u{00A0}'), "U+00A0 not normalized: {text}");
+        // The real story text is present.
+        assert!(text.contains("这里是"));
+        assert!(text.contains("赵乾坤"));
+    }
+
+    #[test]
+    fn test_get_text_with_breaks_caps_indent_spaces() {
+        // 4 &nbsp; in a row should become 2 spaces, not 4.
+        let html = "<div id='c'>&nbsp;&nbsp;&nbsp;&nbsp;hello</div>";
+        let analyzer = HtmlAnalyzer::new(html);
+        let text = analyzer.get_text_with_breaks("#c").unwrap();
+        assert_eq!(text, "  hello");
     }
 }

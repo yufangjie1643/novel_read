@@ -46,7 +46,12 @@ export default function FailureFooter({
         }}
       >
         <span>
-          ⚠ {t('home.failureFooterTitle', { count: failures.length, defaultValue: `${failures.length} source(s) failed` })} {expanded ? '▾' : '▸'}
+          ⚠{' '}
+          {t('home.failureFooterTitle', {
+            count: failures.length,
+            defaultValue: `${failures.length} source(s) failed`,
+          })}{' '}
+          {expanded ? '▾' : '▸'}
         </span>
         <button
           onClick={(e) => {

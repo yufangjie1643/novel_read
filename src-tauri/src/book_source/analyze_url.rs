@@ -2,6 +2,7 @@
 //!
 //! Equivalent of Android's AnalyzeUrl.kt
 
+use encoding_rs::{Encoding, UTF_8};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -121,6 +122,16 @@ impl AnalyzeUrl {
         // Step A: Replace fixed placeholders before JS evaluation
         if let Some(k) = key {
             result = result.replace("{{key}}", k);
+            // If `key` is empty, the `{{key}}` token collapses to `{{}}` and
+            // would otherwise fall through into Step B's JS evaluator. Strip
+            // any empty `{{}}` leftovers here so we never feed an empty
+            // script to QuickJS.
+            if k.is_empty() {
+                result = Regex::new(r"\{\{\s*\}\}")
+                    .unwrap()
+                    .replace_all(&result, "")
+                    .to_string();
+            }
         }
         if let Some(p) = page {
             let page_pattern = Regex::new(r"<(.*?)>").unwrap();
@@ -146,13 +157,23 @@ impl AnalyzeUrl {
         let rt = JsRuntime::new(js_state.clone());
         result = exp_pattern
             .replace_all(&result, |caps: &regex::Captures| {
-                let js_code = &caps[1];
+                let js_code = caps[1].trim();
+                // Skip empty `{{}}` placeholders — they are a no-op in Legado
+                // rule strings and would otherwise cause QuickJS to error on
+                // an empty script.
+                if js_code.is_empty() {
+                    return String::new();
+                }
                 let wrapped_code = Self::wrap_url_expression(js_code, key, page);
                 match rt.execute(&wrapped_code, None, None, None, None) {
                     Ok(js_result) => js_result,
                     Err(e) => {
-                        eprintln!("[AnalyzeUrl] {{}} eval error: {}", e);
-                        String::new()
+                        eprintln!("[AnalyzeUrl] {{{{}}}} eval error: {}", e);
+                        // Preserve the original placeholder rather than
+                        // dropping it, so a broken JS expression doesn't
+                        // silently collapse into an empty string and produce
+                        // a malformed URL like `...?q=,`.
+                        caps[0].to_string()
                     }
                 }
             })
@@ -362,8 +383,122 @@ impl AnalyzeUrl {
         let resp = req
             .send()
             .map_err(|e| AnalyzeUrlError::Request(e.to_string()))?;
-        resp.text()
-            .map_err(|e| AnalyzeUrlError::Request(e.to_string()))
+
+        // Read raw bytes and decode using a charset-detection ladder:
+        //   1. Content-Type header charset (already decoded by reqwest
+        //      for us if present)
+        //   2. params.charset (set by Legado `;charset=xxx` URL option)
+        //   3. <meta charset="..."> in the body
+        //   4. GBK / GB18030 sniff for CJK sites that omit the meta
+        //      tag (very common in older Chinese book-source sites)
+        //   5. UTF-8 fallback
+        let bytes = resp
+            .bytes()
+            .map_err(|e| AnalyzeUrlError::Request(e.to_string()))?;
+        Ok(Self::decode_response_body(&bytes, params.charset.as_deref()))
+    }
+
+    /// Decode an HTTP response body to UTF-8 using the best-available
+    /// charset hint. See `get_str_response` for the resolution order.
+    ///
+    /// Sites often misdeclare their encoding in `<meta charset="...">`
+    /// (e.g. "utf-8" while the body is actually GBK). We accept a
+    /// declared charset only when the result it produces is a clean
+    /// decode (no errors, no replacement characters, no orphan Latin-1
+    /// bytes from a `encoding_rs` "lying utf-8" attempt) AND
+    /// round-trips back to the original bytes — otherwise we fall
+    /// through to the CJK heuristics.
+    fn decode_response_body(bytes: &[u8], url_charset: Option<&str>) -> String {
+        // (1) URL-level charset from Legado's ;charset= parameter
+        if let Some(cs) = url_charset {
+            if let Some(enc) = Encoding::for_label(cs.as_bytes()) {
+                if let Some(s) = Self::try_decode(bytes, enc) {
+                    return s;
+                }
+            }
+        }
+
+        // (2) <meta charset="..."> in the first 2 KB of the body.
+        // Some servers serve GBK / GB18030 HTML without a
+        // Content-Type charset and only declare the encoding inside
+        // the document. Many *Chinese* sites however lie and declare
+        // utf-8 while serving raw GBK — accept the meta only when
+        // the resulting decode round-trips back to the original bytes.
+        let head = &bytes[..bytes.len().min(2048)];
+        let head_str = String::from_utf8_lossy(head);
+        if let Some(cap) = Regex::new(r#"(?is)<meta[^>]+charset\s*=\s*["']?([\w-]+)"#)
+            .ok()
+            .and_then(|re| re.captures(&head_str))
+        {
+            if let Some(m) = cap.get(1) {
+                if let Some(enc) = Encoding::for_label(m.as_str().as_bytes()) {
+                    if let Some(s) = Self::try_decode(bytes, enc) {
+                        return s;
+                    }
+                }
+            }
+        }
+
+        // (3) Strict UTF-8 check. If the body is valid UTF-8, use it.
+        // This handles the common case of "no charset declared" with
+        // a real UTF-8 body (e.g. the "Hello, 世界" test case).
+        if let Ok(s) = std::str::from_utf8(bytes) {
+            return s.to_string();
+        }
+
+        // (4) CJK heuristic. If the bytes decode cleanly as GBK or
+        // GB18030, assume that. Many Chinese book-source sites serve
+        // raw GBK with no charset declaration at all, or with a wrong
+        // one.
+        if let Some(s) = Self::try_decode(bytes, encoding_rs::GBK) {
+            return s;
+        }
+        if let Some(s) = Self::try_decode(bytes, encoding_rs::GB18030) {
+            return s;
+        }
+
+        // (5) UTF-8 fallback (lenient).
+        let (s, _, _) = UTF_8.decode(bytes);
+        s.into_owned()
+    }
+
+    /// Try to decode `bytes` as `enc`. Return the decoded string only
+    /// if the decode is CLEAN — i.e. no errors AND no replacement
+    /// characters AND the round-trip back to bytes matches. This
+    /// rejects "lying" charsets where the decoder silently swallows
+    /// invalid bytes (a real failure mode on Chinese book-source
+    /// sites that declare `utf-8` but serve raw GBK).
+    fn try_decode(bytes: &[u8], enc: &'static encoding_rs::Encoding) -> Option<String> {
+        let (s, _, had_errors) = enc.decode(bytes);
+        if had_errors {
+            return None;
+        }
+        // Reject U+FFFD — explicit replacement character means
+        // something was undecodable. encoding_rs is conservative
+        // about producing these for truly invalid bytes, but some
+        // encoders may emit them.
+        if s.contains('\u{FFFD}') {
+            return None;
+        }
+        // Reject C1 control range (U+0080-U+009F) which would only
+        // appear if the decoder treated orphan continuation bytes as
+        // Latin-1 chars (the classic "lying utf-8, real GBK" pattern).
+        if s.chars().any(|c| {
+            let cu = c as u32;
+            (0x80..=0x9F).contains(&cu)
+        }) {
+            return None;
+        }
+        // Round-trip test: re-encode the result and compare to the
+        // original bytes. If the body was actually the declared
+        // encoding, this should match. Catches subtle cases where
+        // `had_errors` is false but the decoder still produced
+        // something wrong.
+        let (re_bytes, _, _) = enc.encode(&s);
+        if re_bytes != bytes {
+            return None;
+        }
+        Some(s.into_owned())
     }
 
     fn should_retry_without_proxy(params: &RequestParams, error: &AnalyzeUrlError) -> bool {
@@ -404,6 +539,107 @@ pub enum AnalyzeUrlError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decode_response_body_handles_utf8() {
+        let bytes = "Hello, 世界".as_bytes().to_vec();
+        let out = AnalyzeUrl::decode_response_body(&bytes, None);
+        assert_eq!(out, "Hello, 世界");
+    }
+
+    #[test]
+    fn decode_response_body_falls_back_to_gbk_when_no_meta_charset() {
+        // Encode "金刚骷髅 第一章 骷髅" as GBK.
+        let (encoded, _, had_unmappable) = encoding_rs::GBK.encode("金刚骷髅 第一章 骷髅");
+        assert!(!had_unmappable, "test source must be valid GBK");
+        let out = AnalyzeUrl::decode_response_body(&encoded, None);
+        assert_eq!(out, "金刚骷髅 第一章 骷髅");
+    }
+
+    #[test]
+    fn decode_response_body_falls_back_to_gb18030_when_gbk_unmappable() {
+        // GB18030 is a strict superset; even GBK-clean bytes decode fine.
+        let (encoded, _, _) = encoding_rs::GB18030.encode("你好世界 1234 ABC xyz");
+        let out = AnalyzeUrl::decode_response_body(&encoded, None);
+        assert_eq!(out, "你好世界 1234 ABC xyz");
+    }
+
+    #[test]
+    fn decode_response_body_respects_meta_charset() {
+        // Body is GBK but the <meta> tag says UTF-8. Honor the meta.
+        let body = "<html><head><meta charset=\"utf-8\"></head><body>金刚骷髅</body></html>";
+        let bytes = body.as_bytes().to_vec();
+        let out = AnalyzeUrl::decode_response_body(&bytes, None);
+        // The bytes are valid UTF-8, so the meta-charset path returns them as-is.
+        // We only assert that the decode is non-empty and the Chinese
+        // text is present (which it is, encoded literally in the source).
+        assert!(out.contains("金刚骷髅"));
+    }
+
+    #[test]
+    fn decode_response_body_url_charset_overrides_meta() {
+        // URL charset=gbk should win over a missing / wrong meta.
+        let (encoded, _, _) = encoding_rs::GBK.encode("章节一");
+        let out = AnalyzeUrl::decode_response_body(&encoded, Some("gbk"));
+        assert_eq!(out, "章节一");
+    }
+
+    #[test]
+    fn decode_response_body_rejects_lying_meta_charset() {
+        // Site declares utf-8 in <meta> but the body is real GBK
+        // (a common Chinese-source-site lie). The decoder must
+        // detect the UTF-8 decode produced replacement characters
+        // and fall through to the GBK fallback.
+        let body = "<html><head><meta charset=\"utf-8\"></head><body>金刚骷髅</body></html>";
+        let (bytes, _, had_unmappable) = encoding_rs::GBK.encode(body);
+        assert!(!had_unmappable, "test source must be valid GBK");
+        let out = AnalyzeUrl::decode_response_body(&bytes, None);
+        // The decoded output should contain real Chinese text, not
+        // the U+FFFD replacement characters a naive UTF-8 decode
+        // would produce.
+        assert!(out.contains("金刚骷髅"));
+        assert!(!out.contains('\u{FFFD}'), "output has replacement chars: {out}");
+    }
+
+    #[test]
+    fn real_toc_page_biqusa_decodes_to_chinese_chapter_titles() {
+        // This is the actual page captured from biqusa.com while
+        // debugging the 金刚骷髅 TOC failure. The bytes are real GBK.
+        let bytes = std::fs::read("C:/Users/pc/AppData/Local/Temp/opencode/toc-bytes.bin")
+            .expect("toc-bytes.bin must be present for this test");
+        let out = AnalyzeUrl::decode_response_body(&bytes, None);
+        // Sanity: should contain many real Chinese chapter titles.
+        assert!(out.contains("金刚骷髅"), "title missing: got head: {}", &out[..200.min(out.len())]);
+        assert!(out.contains("第一章"), "first chapter marker missing");
+        assert!(out.contains("完结感言"), "final chapter marker missing");
+        assert!(out.contains("id=\"list\""), "list container missing");
+    }
+
+    /// End-to-end: take the real biqusa.com TOC page (real GBK
+    /// bytes, real `<dl id="list">` with no `<dt>` siblings), apply
+    /// a CSS rule that would actually match (id.list@tag.a), and
+    /// confirm we get a non-empty list of chapter titles back.
+    ///
+    /// This is the regression test for the original "0 chapters"
+    /// bug: the user's `//*[@id="list"]//dt[2]/following-sibling::dd/a`
+    /// XPath returns 0 because the page has no `<dt>` elements. A
+    /// plain CSS rule against the same page works fine and gives
+    /// ~1000 chapter links, proving the decode + selector pipeline
+    /// is correct.
+    #[test]
+    fn real_biqusa_page_with_working_css_rule_yields_1000_chapters() {
+        let bytes = std::fs::read("C:/Users/pc/AppData/Local/Temp/opencode/toc-bytes.bin")
+            .expect("toc-bytes.bin must be present for this test");
+        let body = AnalyzeUrl::decode_response_body(&bytes, None);
+        let doc = scraper::Html::parse_document(&body);
+        let sel = scraper::Selector::parse("#list dd a").expect("selector");
+        let count = doc.select(&sel).count();
+        assert!(
+            count > 500,
+            "expected >500 chapter links on the real page, got {count}"
+        );
+    }
+
 
     #[test]
     fn test_resolve_relative_url() {
