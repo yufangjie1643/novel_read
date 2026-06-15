@@ -98,34 +98,32 @@ export default function ExploreShow() {
     [loadedSource, state.exploreUrl, t]
   );
 
+  // Load source from backend when only sourceUrl is provided
   useEffect(() => {
-    if (state.source && state.exploreUrl) {
-      pageRef.current = 1;
-      setBooks([]);
-      setHasMore(true);
-      void fetchBooks(1, false);
-    } else if (!state.source && state.sourceUrl) {
-      // Need to load source first
-      invoke<ApiResponse<BookSource | null>>('get_book_source', { url: state.sourceUrl })
-        .then((resp) => {
-          if (resp.success && resp.data && mountedRef.current) {
-            setLoadedSource(resp.data);
-            pageRef.current = 1;
-            setBooks([]);
-            setHasMore(true);
-            void fetchBooks(1, false);
-          } else if (mountedRef.current) {
-            setMessage(t('explore.sourceNotFound'));
-          }
-        })
-        .catch((e) => {
-          if (mountedRef.current) {
-            setMessage(t('common.error', { message: String(e) }));
-          }
-        });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (loadedSource || !state.sourceUrl) return;
+    invoke<ApiResponse<BookSource | null>>('get_book_source', { url: state.sourceUrl })
+      .then((resp) => {
+        if (resp.success && resp.data && mountedRef.current) {
+          setLoadedSource(resp.data);
+        } else if (mountedRef.current) {
+          setMessage(t('explore.sourceNotFound'));
+        }
+      })
+      .catch((e) => {
+        if (mountedRef.current) {
+          setMessage(t('common.error', { message: String(e) }));
+        }
+      });
+  }, [state.sourceUrl, loadedSource, t]);
+
+  // Fetch books whenever source + exploreUrl are both available
+  useEffect(() => {
+    if (!loadedSource || !state.exploreUrl) return;
+    pageRef.current = 1;
+    setBooks([]);
+    setHasMore(true);
+    void fetchBooks(1, false);
+  }, [loadedSource, state.exploreUrl, fetchBooks]);
 
   function loadMore() {
     if (loading || !hasMore) return;
