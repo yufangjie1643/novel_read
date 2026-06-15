@@ -50,6 +50,7 @@ export function BookSourceGroup({
         onPointerUp={longPress.onPointerUp}
         onPointerCancel={longPress.onPointerCancel}
         onPointerLeave={longPress.onPointerLeave}
+        data-source-row={group.sourceUrl}
         style={{
           display: 'flex',
           alignItems: 'center',

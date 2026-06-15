@@ -1,223 +1,306 @@
-import { useState, useEffect, useCallback, useRef, useDeferredValue, startTransition } from 'react';
+import { useState, useEffect, useCallback, useRef, useDeferredValue } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { ApiResponse, BookSource, ExploreItem, ExploreItemsPage, SearchBook } from '../types';
+import type {
+  ApiResponse,
+  BookSource,
+  BookSourceGroup as Group,
+  ExploreItem,
+  ExploreItemsPage,
+  ExploreKind,
+} from '../types';
+import { BookSourceGroup, type KindsState } from '../components/explore/BookSourceGroup';
+import { BookSourceMenu, type BookSourceAction } from '../components/explore/BookSourceMenu';
 
-const EXPLORE_RENDER_BATCH_SIZE = 80;
-const EXPLORE_RENDER_INCREMENT = 120;
-const EXPLORE_LOAD_DELAY_MS = 500;
+const PAGE_LIMIT = 300;
 
 export default function Explore() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [exploreItems, setExploreItems] = useState<ExploreItem[]>([]);
-  const [totalItems, setTotalItems] = useState(0);
-  const [results, setResults] = useState<SearchBook[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [searchKey, setSearchKey] = useState('');
+  const deferredFilter = useDeferredValue(searchKey);
   const [sourcesLoading, setSourcesLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
-  const [activeItemId, setActiveItemId] = useState<string | null>(null);
-  const [activeSourceUrl, setActiveSourceUrl] = useState<string | null>(null);
-  const [filter, setFilter] = useState('');
-  const [sourceCache, setSourceCache] = useState<Record<string, BookSource>>({});
-  const deferredFilter = useDeferredValue(filter);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Record<string, true>>({});
+  const [kindsBySource, setKindsBySource] = useState<Record<string, KindsState>>({});
+  const [menuState, setMenuState] = useState<{ group: Group; anchorEl: HTMLElement } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<Group | null>(null);
   const mountedRef = useRef(false);
-  const listRequestIdRef = useRef(0);
+  const kindRequestIdRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      listRequestIdRef.current += 1;
     };
   }, []);
 
-  const loadItemsPage = useCallback(
-    async (offset: number, filterText: string, reset: boolean, requestId: number) => {
-      if (reset) {
-        setSourcesLoading(true);
-      } else {
-        setLoadingMore(true);
-      }
-
-      const limit = reset ? EXPLORE_RENDER_BATCH_SIZE : EXPLORE_RENDER_INCREMENT;
-      const normalizedFilter = filterText.trim();
+  // Initial load: pull a one-shot full list and group by source_url
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      setSourcesLoading(true);
+      setError(null);
       try {
         const resp = await invoke<ApiResponse<ExploreItemsPage>>('get_explore_items', {
-          offset,
-          limit,
-          filter: normalizedFilter || null,
+          offset: 0,
+          limit: PAGE_LIMIT,
+          filter: null,
         });
-        if (!mountedRef.current || requestId !== listRequestIdRef.current) return;
+        if (cancelled) return;
         if (resp.success && resp.data) {
-          startTransition(() => {
-            setExploreItems((prev) =>
-              reset ? resp.data!.items : [...prev, ...resp.data!.items]
-            );
-            setTotalItems(resp.data!.total);
-          });
-        } else if (resp.error) {
-          setMessage(t('common.error', { message: resp.error }));
+          const grouped = groupItems(resp.data.items);
+          setGroups(grouped);
+          // Auto-expand the first group
+          if (grouped.length > 0) {
+            setExpanded({ [grouped[0].sourceUrl]: true });
+          }
+        } else {
+          setError(resp.error || t('explore.error.load'));
         }
       } catch (e) {
-        if (mountedRef.current && requestId === listRequestIdRef.current) {
-          setMessage(t('common.error', { message: String(e) }));
-        }
+        if (!cancelled) setError(t('common.error', { message: String(e) }));
       } finally {
-        if (mountedRef.current && requestId === listRequestIdRef.current) {
-          if (reset) {
-            setSourcesLoading(false);
-          } else {
-            setLoadingMore(false);
-          }
+        if (!cancelled) setSourcesLoading(false);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const loadKinds = useCallback(
+    async (sourceUrl: string) => {
+      setKindsBySource((prev) => ({ ...prev, [sourceUrl]: { kind: 'loading' } }));
+      const requestId = ++kindRequestIdRef.current;
+      try {
+        const resp = await invoke<ApiResponse<ExploreKind[]>>('get_explore_kinds', {
+          sourceUrl,
+        });
+        if (!mountedRef.current || requestId !== kindRequestIdRef.current) return;
+        if (resp.success && resp.data) {
+          setKindsBySource((prev) => ({ ...prev, [sourceUrl]: { kind: 'ok', kinds: resp.data! } }));
+        } else {
+          setKindsBySource((prev) => ({
+            ...prev,
+            [sourceUrl]: { kind: 'error', message: resp.error || t('explore.error.explore') },
+          }));
         }
+      } catch (e) {
+        if (!mountedRef.current || requestId !== kindRequestIdRef.current) return;
+        setKindsBySource((prev) => ({
+          ...prev,
+          [sourceUrl]: { kind: 'error', message: String(e) },
+        }));
       }
     },
     [t]
   );
 
+  // When a group is expanded and its kinds haven't been loaded yet, fetch them
   useEffect(() => {
-    const requestId = listRequestIdRef.current + 1;
-    listRequestIdRef.current = requestId;
-    setExploreItems([]);
-    setTotalItems(0);
-    setResults([]);
-    setMessage('');
-    setActiveItemId(null);
-    setActiveSourceUrl(null);
-    setSourcesLoading(true);
-    setLoadingMore(false);
-
-    const timer = window.setTimeout(() => {
-      void loadItemsPage(0, deferredFilter, true, requestId);
-    }, EXPLORE_LOAD_DELAY_MS);
-
-    return () => {
-      window.clearTimeout(timer);
-      listRequestIdRef.current += 1;
-    };
-  }, [deferredFilter, loadItemsPage]);
-
-  async function getBookSource(url: string) {
-    const cached = sourceCache[url];
-    if (cached) return cached;
-
-    const resp = await invoke<ApiResponse<BookSource | null>>('get_book_source', { url });
-    if (!resp.success || !resp.data) {
-      throw new Error(resp.error || t('explore.sourceNotFound'));
+    for (const sourceUrl of Object.keys(expanded)) {
+      if (!kindsBySource[sourceUrl]) {
+        void loadKinds(sourceUrl);
+      }
     }
-    if (mountedRef.current) {
-      setSourceCache((prev) => ({ ...prev, [url]: resp.data! }));
-    }
-    return resp.data;
-  }
+  }, [expanded, kindsBySource, loadKinds]);
 
-  async function loadMoreItems() {
-    if (loadingMore || sourcesLoading || exploreItems.length >= totalItems) return;
-    const requestId = listRequestIdRef.current;
-    await loadItemsPage(exploreItems.length, deferredFilter, false, requestId);
-  }
-
-  async function fetchExplore(item: ExploreItem) {
-    setActiveItemId(item.id);
-    setActiveSourceUrl(item.source_url);
-    setLoading(true);
-    setMessage(t('common.loading'));
-    setResults([]);
-
-    try {
-      const source = await getBookSource(item.source_url);
-      const resp = await invoke<ApiResponse<SearchBook[]>>('explore_books', {
-        source,
-        url: item.url,
-        page: 1,
-      });
-      if (!mountedRef.current) return;
-      if (resp.success && resp.data) {
-        setResults(resp.data);
-        setMessage(t('explore.foundBooks', { count: resp.data.length }));
+  function toggle(sourceUrl: string) {
+    setExpanded((prev) => {
+      const next = { ...prev };
+      if (next[sourceUrl]) {
+        delete next[sourceUrl];
       } else {
-        setMessage(t('explore.failed', { error: resp.error || 'unknown error' }));
+        next[sourceUrl] = true;
       }
-    } catch (e) {
-      if (mountedRef.current) {
-        setMessage(t('common.error', { message: String(e) }));
-      }
-    } finally {
-      if (mountedRef.current) setLoading(false);
+      return next;
+    });
+  }
+
+  function handleChipClick(group: Group, kind: ExploreKind) {
+    if (!kind.url) return;
+    navigate('/explore-show', {
+      state: {
+        exploreName: `${group.sourceName} / ${kind.title}`,
+        sourceUrl: group.sourceUrl,
+        exploreUrl: kind.url,
+      },
+    });
+  }
+
+  function handleErrorClick(kind: ExploreKind) {
+    const message = kind.url || '(no stack trace)';
+    window.alert(`${t('explore.errorDialog.title')}\n\n${message}`);
+  }
+
+  function handleMenuAction(action: BookSourceAction) {
+    if (!menuState) return;
+    const { group } = menuState;
+    switch (action) {
+      case 'edit':
+        navigate(`/sources/${encodeURIComponent(group.sourceUrl)}`);
+        return;
+      case 'top':
+        void invoke<ApiResponse<null>>('top_book_source', { url: group.sourceUrl }).then(() => {
+          void reloadGroups();
+        });
+        return;
+      case 'login':
+        void openLogin(group.sourceUrl);
+        return;
+      case 'searchThis':
+        navigate('/', { state: { sourceScope: group.sourceUrl } });
+        return;
+      case 'refresh':
+        setKindsBySource((prev) => {
+          const next = { ...prev };
+          delete next[group.sourceUrl];
+          return next;
+        });
+        void loadKinds(group.sourceUrl);
+        return;
+      case 'delete':
+        setPendingDelete(group);
+        return;
     }
   }
 
-  async function openBook(book: SearchBook) {
-    const sourceUrl = book.origin || activeSourceUrl;
-    if (!sourceUrl) {
-      setMessage(t('explore.sourceNotFound'));
-      return;
-    }
-
+  async function openLogin(sourceUrl: string) {
     try {
-      const source = await getBookSource(sourceUrl);
-      navigate(`/book/${encodeURIComponent(book.book_url)}`, {
-        state: {
-          preview: true,
-          source,
-          searchBook: book,
-        },
-      });
+      const resp = await invoke<ApiResponse<BookSource | null>>('get_book_source', { url: sourceUrl });
+      if (resp.success && resp.data?.login_url) {
+        await openUrl(resp.data.login_url);
+      }
     } catch (e) {
-      setMessage(t('common.error', { message: String(e) }));
+      console.error('openLogin failed:', e);
     }
   }
 
-  const hasMoreItems = exploreItems.length < totalItems;
-  const isFiltering = deferredFilter.trim().length > 0;
+  async function reloadGroups() {
+    try {
+      const resp = await invoke<ApiResponse<ExploreItemsPage>>('get_explore_items', {
+        offset: 0,
+        limit: PAGE_LIMIT,
+        filter: null,
+      });
+      if (resp.success && resp.data) {
+        setGroups(groupItems(resp.data.items));
+      }
+    } catch (e) {
+      console.error('reloadGroups failed:', e);
+    }
+  }
+
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    const group = pendingDelete;
+    setPendingDelete(null);
+    try {
+      const resp = await invoke<ApiResponse<null>>('delete_book_source', { url: group.sourceUrl });
+      if (resp.success) {
+        setGroups((prev) => prev.filter((g) => g.sourceUrl !== group.sourceUrl));
+        setExpanded((prev) => {
+          const next = { ...prev };
+          delete next[group.sourceUrl];
+          return next;
+        });
+        setKindsBySource((prev) => {
+          const next = { ...prev };
+          delete next[group.sourceUrl];
+          return next;
+        });
+      } else {
+        setError(resp.error || t('explore.error.load'));
+      }
+    } catch (e) {
+      setError(t('common.error', { message: String(e) }));
+    }
+  }
+
+  // Filter (client-side)
+  const visibleGroups = (() => {
+    const trimmed = deferredFilter.trim();
+    if (!trimmed) return groups;
+    if (trimmed.startsWith('group:')) {
+      const key = trimmed.substring('group:'.length).toLowerCase();
+      return groups.filter((g) => (g.sourceGroup || '').toLowerCase().includes(key));
+    }
+    const key = trimmed.toLowerCase();
+    return groups.filter((g) => {
+      if (g.sourceName.toLowerCase().includes(key)) return true;
+      const kindsState = kindsBySource[g.sourceUrl];
+      if (kindsState?.kind === 'ok') {
+        return kindsState.kinds.some((k) => k.title.toLowerCase().includes(key));
+      }
+      return false;
+    });
+  })();
 
   return (
     <div>
-      <h1 style={{ margin: '0 0 20px', fontSize: 24, fontWeight: 700, color: '#1a1a2e' }}>
+      <h1 style={{ margin: '0 0 16px', fontSize: 24, fontWeight: 700, color: '#1a1a2e' }}>
         {t('explore.title')}
       </h1>
 
-      {(exploreItems.length > 0 || isFiltering) && (
-        <div style={{ position: 'relative', marginBottom: 16 }}>
-          <input
-            type="text"
-            placeholder={t('explore.filterPlaceholder')}
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+      <div style={{ position: 'relative', marginBottom: 16 }}>
+        <input
+          type="text"
+          placeholder={t('explore.searchPlaceholder')}
+          value={searchKey}
+          onChange={(e) => setSearchKey(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '10px 36px 10px 14px',
+            borderRadius: 8,
+            border: '1px solid #e0e0e0',
+            fontSize: 14,
+            outline: 'none',
+            fontFamily: 'inherit',
+            boxSizing: 'border-box',
+          }}
+        />
+        {searchKey && (
+          <button
+            onClick={() => setSearchKey('')}
+            aria-label="clear"
             style={{
-              width: '100%',
-              padding: '10px 36px 10px 14px',
-              borderRadius: 8,
-              border: '1px solid #e0e0e0',
-              fontSize: 14,
-              outline: 'none',
-              fontFamily: 'inherit',
-              boxSizing: 'border-box',
+              position: 'absolute',
+              right: 10,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              color: '#999',
+              fontSize: 18,
+              padding: 0,
+              lineHeight: 1,
             }}
-          />
-          {filter && (
-            <button
-              onClick={() => setFilter('')}
-              style={{
-                position: 'absolute',
-                right: 10,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: '#999',
-                fontSize: 18,
-                padding: 0,
-                lineHeight: 1,
-              }}
-            >
-              ×
-            </button>
-          )}
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div
+          style={{
+            background: '#ffebee',
+            color: '#c62828',
+            padding: '10px 16px',
+            borderRadius: 8,
+            marginBottom: 16,
+            fontSize: 14,
+            fontWeight: 500,
+          }}
+        >
+          {error}
         </div>
       )}
 
@@ -236,7 +319,7 @@ export default function Explore() {
           />
           <p style={{ fontSize: 14 }}>{t('common.loading')}</p>
         </div>
-      ) : totalItems === 0 && !isFiltering ? (
+      ) : visibleGroups.length === 0 ? (
         <div
           style={{
             textAlign: 'center',
@@ -247,221 +330,125 @@ export default function Explore() {
             boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
           }}
         >
-          {t('explore.noExploreSources')}
-        </div>
-      ) : exploreItems.length === 0 ? (
-        <div
-          style={{
-            textAlign: 'center',
-            padding: '40px 20px',
-            color: '#888',
-            background: '#fff',
-            borderRadius: 12,
-            boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-            marginBottom: 20,
-          }}
-        >
-          {t('explore.noFilterResults')}
+          {groups.length === 0
+            ? t('explore.noExploreSources')
+            : t('common.none')}
         </div>
       ) : (
-        <>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
-            {exploreItems.map((item) => {
-              const isActive = activeItemId === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => fetchExplore(item)}
-                  disabled={loading}
-                  style={{
-                    padding: '7px 16px',
-                    borderRadius: 20,
-                    border: '1px solid',
-                    borderColor: isActive ? '#1976d2' : '#e0e0e0',
-                    background: isActive ? '#1976d2' : '#fff',
-                    color: isActive ? '#fff' : '#555',
-                    cursor: loading ? 'not-allowed' : 'pointer',
-                    fontSize: 13,
-                    fontWeight: 500,
-                    transition: 'background 0.2s, border-color 0.2s, color 0.2s',
-                    boxShadow: isActive ? '0 2px 8px rgba(25,118,210,0.3)' : 'none',
-                  }}
-                >
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-          {hasMoreItems && (
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                gap: 12,
-                margin: '-4px 0 20px',
-                flexWrap: 'wrap',
-              }}
-            >
-              <span style={{ fontSize: 12, color: '#888' }}>
-                {t('explore.renderedCount', {
-                  shown: exploreItems.length,
-                  total: totalItems,
-                  defaultValue: `已显示 ${exploreItems.length} / ${totalItems}`,
-                })}
-              </span>
-              <button
-                type="button"
-                onClick={loadMoreItems}
-                disabled={loadingMore}
-                style={{
-                  padding: '8px 18px',
-                  borderRadius: 8,
-                  border: '1px solid #bbdefb',
-                  background: '#eef4fd',
-                  color: '#1976d2',
-                  fontSize: 13,
-                  fontWeight: 700,
-                  cursor: loadingMore ? 'not-allowed' : 'pointer',
-                  opacity: loadingMore ? 0.7 : 1,
-                }}
-              >
-                {loadingMore
-                  ? t('common.loading')
-                  : t('explore.loadMore', { defaultValue: '加载更多' })}
-              </button>
-            </div>
-          )}
-        </>
-      )}
-
-      {message && (
         <div
           style={{
-            background: message.includes(t('common.error')) ? '#ffebee' : '#e3f2fd',
-            color: message.includes(t('common.error')) ? '#c62828' : '#1565c0',
-            padding: '10px 16px',
-            borderRadius: 8,
-            marginBottom: 16,
-            fontSize: 14,
-            fontWeight: 500,
+            background: '#fff',
+            borderRadius: 12,
+            padding: '4px 8px',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
           }}
         >
-          {message}
+          {visibleGroups.map((group) => (
+            <BookSourceGroup
+              key={group.sourceUrl}
+              group={group}
+              kindsState={kindsBySource[group.sourceUrl] ?? { kind: 'idle' }}
+              isExpanded={!!expanded[group.sourceUrl]}
+              onToggle={() => toggle(group.sourceUrl)}
+              onChipClick={(kind) => handleChipClick(group, kind)}
+              onErrorClick={handleErrorClick}
+              onMenuOpen={() => {
+                const el = document.querySelector(
+                  `[data-source-row="${CSS.escape(group.sourceUrl)}"]`
+                ) as HTMLElement | null;
+                if (el) setMenuState({ group, anchorEl: el });
+              }}
+              onRetryKinds={() => void loadKinds(group.sourceUrl)}
+            />
+          ))}
         </div>
       )}
 
-      {loading && (
-        <div style={{ textAlign: 'center', padding: '40px 20px', color: '#888' }}>
-          <div
-            style={{
-              width: 28,
-              height: 28,
-              border: '3px solid #e8e8f0',
-              borderTopColor: '#1976d2',
-              borderRadius: '50%',
-              animation: 'spin 0.8s linear infinite',
-              margin: '0 auto 12px',
-            }}
-          />
-          <p style={{ fontSize: 14 }}>{t('common.loading')}</p>
-        </div>
+      {menuState && (
+        <BookSourceMenu
+          group={menuState.group}
+          anchorEl={menuState.anchorEl}
+          onClose={() => setMenuState(null)}
+          onAction={handleMenuAction}
+        />
       )}
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-          gap: 20,
-        }}
-      >
-        {results.map((book) => (
+      {pendingDelete && (
+        <div
+          role="dialog"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.4)',
+            zIndex: 1100,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+          onClick={() => setPendingDelete(null)}
+        >
           <div
-            key={book.book_url}
-            onClick={() => openBook(book)}
+            onClick={(e) => e.stopPropagation()}
             style={{
               background: '#fff',
               borderRadius: 12,
-              padding: 14,
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10,
-              boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-              transition: 'transform 0.2s, box-shadow 0.2s',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = 'translateY(-2px)';
-              e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,0.1)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = 'translateY(0)';
-              e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)';
+              padding: 24,
+              maxWidth: 400,
+              width: '90%',
+              boxShadow: '0 12px 32px rgba(0,0,0,0.2)',
             }}
           >
-            {book.cover_url ? (
-              <img
-                src={book.cover_url}
-                alt={book.name}
-                style={{
-                  width: '100%',
-                  height: 220,
-                  objectFit: 'cover',
-                  borderRadius: 8,
-                  background: '#f0f0f0',
-                }}
-                onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-              />
-            ) : (
-              <div
-                style={{
-                  width: '100%',
-                  height: 220,
-                  borderRadius: 8,
-                  background: 'linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#1976d2',
-                  fontSize: 16,
-                  fontWeight: 700,
-                }}
-              >
-                {book.name.slice(0, 2)}
-              </div>
-            )}
-            <div
-              style={{
-                fontWeight: 700,
-                fontSize: 14,
-                color: '#1a1a2e',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-              title={book.name}
-            >
-              {book.name}
+            <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>
+              {t('explore.menu.deleteConfirm', { name: pendingDelete.sourceName })}
             </div>
-            <div style={{ color: '#666', fontSize: 12 }}>{book.author}</div>
-            {book.intro && (
-              <div
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setPendingDelete(null)}
                 style={{
-                  color: '#888',
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                  display: '-webkit-box',
-                  WebkitLineClamp: 3,
-                  WebkitBoxOrient: 'vertical',
-                  overflow: 'hidden',
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: '1px solid #e0e0e0',
+                  background: '#fff',
+                  color: '#555',
+                  cursor: 'pointer',
                 }}
               >
-                {book.intro}
-              </div>
-            )}
+                {t('common.cancel', { defaultValue: '取消' })}
+              </button>
+              <button
+                onClick={confirmDelete}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: '#f44336',
+                  color: '#fff',
+                  cursor: 'pointer',
+                }}
+              >
+                {t('explore.menu.delete')}
+              </button>
+            </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
     </div>
   );
+}
+
+function groupItems(items: ExploreItem[]): Group[] {
+  const map = new Map<string, Group>();
+  for (const item of items) {
+    if (!map.has(item.source_url)) {
+      map.set(item.source_url, {
+        sourceUrl: item.source_url,
+        sourceName: item.source_name,
+        sourceGroup: null,
+        hasLoginUrl: false,
+        weight: 0,
+        customOrder: 0,
+      });
+    }
+  }
+  return Array.from(map.values());
 }
