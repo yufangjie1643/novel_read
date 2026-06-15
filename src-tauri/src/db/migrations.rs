@@ -358,6 +358,18 @@ CREATE TABLE IF NOT EXISTS source_stats (
 CREATE INDEX IF NOT EXISTS idx_source_stats_health ON source_stats(health_score DESC);
 "#;
 
+pub const CREATE_BOOK_PROGRESS_SYNC_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS book_progress_sync (
+    bookUrl TEXT PRIMARY KEY,
+    lastLocalTime INTEGER NOT NULL DEFAULT 0,
+    lastRemoteTime INTEGER NOT NULL DEFAULT 0,
+    lastSyncedAt INTEGER NOT NULL DEFAULT 0,
+    remoteEtag TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_book_progress_sync_synced
+    ON book_progress_sync(lastSyncedAt DESC);
+"#;
+
 /// Execute all migration statements
 pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CREATE_BOOKS_TABLE)?;
@@ -394,6 +406,7 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CREATE_RSS_READ_RECORDS_TABLE)?;
     conn.execute_batch(CREATE_CHAPTER_CONTENTS_TABLE)?;
     conn.execute_batch(CREATE_SOURCE_STATS_TABLE)?;
+    conn.execute_batch(CREATE_BOOK_PROGRESS_SYNC_TABLE)?;
 
     // --- Per-operation health columns (added later, migrate existing DBs) ---
     // Use a helper so each ALTER TABLE is best-effort (ignore "duplicate

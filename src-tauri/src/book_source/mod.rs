@@ -1,5 +1,6 @@
 pub mod analyze_url;
 pub mod analyzers;
+pub mod fullbook_search;
 pub mod js_extensions;
 pub mod js_runtime;
 pub mod relevance;

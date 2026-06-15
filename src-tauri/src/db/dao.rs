@@ -1,7 +1,7 @@
 use super::models::{
-    Book, BookChapter, BookGroup, BookSource, Bookmark, DictRule, ExploreItem, ExploreItemsPage,
-    HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource,
-    RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
+    Book, BookChapter, BookGroup, BookProgressSync, BookSource, Bookmark, DictRule, ExploreItem,
+    ExploreItemsPage, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle,
+    RssReadRecord, RssSource, RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
 };
 use rusqlite::{params, Connection, Result, Row};
 
@@ -2112,5 +2112,114 @@ impl<'a> ChapterContentDao<'a> {
         }
         tx.commit()?;
         Ok(entries.len())
+    }
+}
+
+// ============================================================================
+// BookProgressDao
+// ============================================================================
+
+pub struct BookProgressDao<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> BookProgressDao<'a> {
+    pub fn new(conn: &'a Connection) -> Self {
+        Self { conn }
+    }
+
+    pub fn get(&self, book_url: &str) -> Result<Option<BookProgressSync>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT bookUrl, lastLocalTime, lastRemoteTime, lastSyncedAt, remoteEtag
+             FROM book_progress_sync WHERE bookUrl = ?1",
+        )?;
+        let mut rows = stmt.query(params![book_url])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(BookProgressSync {
+                book_url: row.get(0)?,
+                last_local_time: row.get(1)?,
+                last_remote_time: row.get(2)?,
+                last_synced_at: row.get(3)?,
+                remote_etag: row.get(4).ok(),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn upsert(&self, item: &BookProgressSync) -> Result<()> {
+        self.conn.execute(
+            r#"INSERT INTO book_progress_sync
+                 (bookUrl, lastLocalTime, lastRemoteTime, lastSyncedAt, remoteEtag)
+               VALUES (?1, ?2, ?3, ?4, ?5)
+               ON CONFLICT(bookUrl) DO UPDATE SET
+                 lastLocalTime = excluded.lastLocalTime,
+                 lastRemoteTime = excluded.lastRemoteTime,
+                 lastSyncedAt = excluded.lastSyncedAt,
+                 remoteEtag = excluded.remoteEtag"#,
+            params![
+                item.book_url,
+                item.last_local_time,
+                item.last_remote_time,
+                item.last_synced_at,
+                item.remote_etag
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete(&self, book_url: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM book_progress_sync WHERE bookUrl = ?1",
+            params![book_url],
+        )?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn book_progress_dao_upsert_and_get() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE book_progress_sync (
+                bookUrl TEXT PRIMARY KEY,
+                lastLocalTime INTEGER NOT NULL,
+                lastRemoteTime INTEGER NOT NULL,
+                lastSyncedAt INTEGER NOT NULL,
+                remoteEtag TEXT
+            )",
+        )
+        .unwrap();
+
+        let dao = BookProgressDao::new(&conn);
+        let item = BookProgressSync {
+            book_url: "b1".to_string(),
+            last_local_time: 100,
+            last_remote_time: 200,
+            last_synced_at: 300,
+            remote_etag: Some("etag1".to_string()),
+        };
+        dao.upsert(&item).unwrap();
+        let got = dao.get("b1").unwrap().unwrap();
+        assert_eq!(got.last_local_time, 100);
+        assert_eq!(got.remote_etag.as_deref(), Some("etag1"));
+
+        // upsert overwrites
+        let updated = BookProgressSync {
+            last_local_time: 150,
+            ..item.clone()
+        };
+        dao.upsert(&updated).unwrap();
+        let got = dao.get("b1").unwrap().unwrap();
+        assert_eq!(got.last_local_time, 150);
+
+        // delete
+        dao.delete("b1").unwrap();
+        assert!(dao.get("b1").unwrap().is_none());
     }
 }

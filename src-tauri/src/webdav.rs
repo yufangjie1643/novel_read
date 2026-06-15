@@ -101,6 +101,54 @@ impl WebDavClient {
             .map_err(|e| WebDavError::Io(e.to_string()))?;
         Ok(())
     }
+
+    /// Download a remote file's body as a UTF-8 string.
+    /// Returns `Ok(None)` when the resource is missing (404) so callers can
+    /// distinguish "no remote progress yet" from a hard failure.
+    pub async fn download_to_string(&self, remote_path: &str) -> Result<Option<String>, WebDavError> {
+        let url = format!("{}/{}", self.base_url, remote_path.trim_start_matches('/'));
+        let req = self.client.get(&url);
+        let resp = self
+            .auth(req)
+            .send()
+            .await
+            .map_err(|e| WebDavError::Request(e.to_string()))?;
+        if resp.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(WebDavError::Status(resp.status().as_u16()));
+        }
+        let body = resp
+            .text()
+            .await
+            .map_err(|e| WebDavError::Request(e.to_string()))?;
+        Ok(Some(body))
+    }
+
+    /// Upload a UTF-8 string body to the given remote path. Used by the
+    /// per-book progress sync to PUT a JSON snapshot.
+    pub async fn upload_string(
+        &self,
+        remote_path: &str,
+        body: &str,
+    ) -> Result<(), WebDavError> {
+        let url = format!("{}/{}", self.base_url, remote_path.trim_start_matches('/'));
+        let req = self
+            .client
+            .put(&url)
+            .header("Content-Type", "application/json")
+            .body(body.to_string());
+        let resp = self
+            .auth(req)
+            .send()
+            .await
+            .map_err(|e| WebDavError::Request(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(WebDavError::Status(resp.status().as_u16()));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

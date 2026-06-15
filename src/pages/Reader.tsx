@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,15 @@ import TTSOverlay from '../components/reader/TTSOverlay';
 import TipValue, { readTipKind, TipKind } from '../components/reader/TipValue';
 import TipSettingsSection from '../components/reader/TipSettingsSection';
 import '../styles/reader-animations.css';
+import { useReaderNav } from '../hooks/useReaderNav';
+import ContextMenu, { type ContextMenuState } from '../components/reader/ContextMenu';
+import NavSettingsPopover from '../components/reader/NavSettingsPopover';
+import ShortcutsHelpModal from '../components/reader/ShortcutsHelpModal';
+import BookmarkButton from '../components/reader/BookmarkButton';
+import FullBookSearchPanel from '../components/reader/FullBookSearchPanel';
+import { flashRange } from '../components/reader/domHighlight';
+import { addBookmark } from '../components/reader/bookmarkActions';
+import { syncBookProgress } from '../components/reader/syncActions';
 
 /// Reader theme — chosen by the FAB theme-cycler button.
 /// `day`   — bright background, dark text (default light reading).
@@ -116,6 +125,20 @@ export default function Reader() {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [readerPanel, setReaderPanel] = useState<ReaderPanel>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [showNavSettings, setShowNavSettings] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [selectedText, setSelectedText] = useState('');
+  /// `null` = search panel closed; `''` = open with empty input;
+  /// non-empty string = open with prefilled keyword (right-click
+  /// "Search in Book" passes the selected text here).
+  const [searchKeyword, setSearchKeyword] = useState<string | null>(null);
+  const [toast, setToast] = useState<string>('');
+
+  const showToast = useCallback((msg: string) => {
+    setToast(msg);
+    window.setTimeout(() => setToast(''), 2000);
+  }, []);
   const [pageAnim, setPageAnim] = useState<PageAnim>(() => {
     const raw = localStorage.getItem('reader_page_anim');
     if (raw === 'cover' || raw === 'slide' || raw === 'simulation' || raw === 'scroll' || raw === 'none') {
@@ -954,6 +977,36 @@ export default function Reader() {
     }, 220);
   }
 
+  const goToNextChapter = useCallback(() => {
+    if (nextChapter) goToChapter(nextChapter.index);
+  }, [nextChapter, goToChapter]);
+
+  const cycleTheme = useCallback(() => {
+    const idx = THEME_CYCLE.indexOf(theme);
+    const next = THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
+    setTheme(next);
+    localStorage.setItem('reader_theme', next);
+  }, [theme]);
+
+  const doAddBookmark = useCallback(async (content: string) => {
+    if (!book || !currentChapter) return;
+    try {
+      await addBookmark({
+        book_name: book.name,
+        book_author: book.author ?? '',
+        chapter_name: currentChapter.title ?? null,
+        book_url: book.book_url,
+        chapter_url: currentChapter.url ?? null,
+        chapter_index: currentChapter.index,
+        page_index: 0,
+        content: content || currentChapter.title?.slice(0, 200) || '',
+      });
+      showToast(t('reader.bookmarkAdded'));
+    } catch (e) {
+      showToast(t('reader.bookmarkAddFailed', { error: String(e) }));
+    }
+  }, [book, currentChapter, showToast, t]);
+
   function scrollReaderPage(direction: 1 | -1) {
     const distance = Math.max(160, window.innerHeight * 0.72) * direction;
     window.scrollBy({ top: distance, behavior: pageAnim === 'none' ? 'auto' : 'smooth' });
@@ -1134,11 +1187,6 @@ export default function Reader() {
             goToChapter(nextChapterRef.current.index);
           }
           break;
-        case 'Escape':
-          navigate(`/book/${encodeURIComponent(decodedUrl)}`, {
-            state: { parent: readerParentPath.current },
-          });
-          break;
         case ' ':
           e.preventDefault();
           if (isSpeakingRef.current) {
@@ -1187,6 +1235,61 @@ export default function Reader() {
     return () => window.removeEventListener('keydown', handleKeyDown);
     // All mutable state is accessed via refs to avoid re-attaching the listener on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Mount the keyboard / wheel / mouse-nav hook once all callbacks are
+  // stable. The hook reads `nav.prefs.stickyToolbar` etc. to drive its
+  // own effects; the callbacks below close over `doAddBookmark`,
+  // `goToNextChapter`, `goToChapter`, `prevChapter`, `nextChapter`,
+  // `setReaderPanel`, `setShowSettings`, `setShowShortcuts`,
+  // `setShowNavSettings`, `setContextMenu`, `nav`, and `navigate`.
+  const nav = useReaderNav({
+    contentRef,
+    hasPrevChapter: !!prevChapter,
+    hasNextChapter: !!nextChapter,
+    onPrevChapter: () => prevChapter && goToChapter(prevChapter.index),
+    onNextChapter: () => nextChapter && goToNextChapter(),
+    onFirstChapter: () => chapters[0] && goToChapter(0),
+    onLastChapter: () => chapters.length > 0 && goToChapter(chapters.length - 1),
+    onOpenSearch: () => setSearchKeyword(''),
+    onAddBookmark: () => doAddBookmark(''),
+    onOpenBookmarkList: () => navigate('/bookmarks'),
+    onToggleToolbar: () => nav.setPrefs({ ...nav.prefs, stickyToolbar: !nav.prefs.stickyToolbar }),
+    onShowShortcuts: () => setShowShortcuts(true),
+    onFullscreen: () => {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen?.();
+    },
+    onClose: () => {
+      if (contextMenu) setContextMenu(null);
+      else if (showShortcuts) setShowShortcuts(false);
+      else if (showNavSettings) setShowNavSettings(false);
+      else if (readerPanel) setReaderPanel(null);
+      else if (document.fullscreenElement) document.exitFullscreen();
+    },
+  });
+
+  /// Right-click on the content pane opens the contextual menu. Text
+  /// selection yields a `text` menu (copy / bookmark / replace / search);
+  /// a bare click yields a `page` menu (chapter nav, catalog, theme,
+  /// settings, exit).
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (!contentRef.current?.contains(e.target as Node)) return;
+      e.preventDefault();
+      const sel = window.getSelection();
+      const text = sel ? sel.toString().trim() : '';
+      const hasSel = text.length >= 1 && text.length <= 500;
+      setSelectedText(text);
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        kind: hasSel ? 'text' : 'page',
+        selectedText: text,
+      });
+    };
+    document.addEventListener('contextmenu', handler);
+    return () => document.removeEventListener('contextmenu', handler);
   }, []);
 
   const tStyleBase = themeStyles[theme] || themeStyles.day;
@@ -1501,6 +1604,35 @@ export default function Reader() {
               style={showSettings ? btnStyle(true) : btnStyle()}
             >
               {t('common.settings')}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!book) return;
+                try {
+                  const r = await syncBookProgress(book.book_url, 'auto');
+                  const key =
+                    r.status === 'uploaded'
+                      ? 'reader.sync.uploaded'
+                      : r.status === 'downloaded'
+                        ? 'reader.sync.downloaded'
+                        : r.status === 'skipped'
+                          ? 'reader.sync.skipped'
+                          : 'reader.sync.failed';
+                  const msg =
+                    r.status === 'failed'
+                      ? t(key, { error: r.error })
+                      : t(key);
+                  showToast(msg);
+                } catch (e) {
+                  showToast(t('reader.sync.failed', { error: String(e) }));
+                }
+              }}
+              data-testid="cloud-progress-btn"
+              title={t('reader.sync.title')}
+              style={btnStyle()}
+            >
+              {t('reader.sync.syncNow')}
             </button>
           </div>
         </div>
@@ -2889,6 +3021,142 @@ export default function Reader() {
           >
             {Math.round(chapterProgressPercent)}%
           </span>
+        </div>
+      )}
+
+      {/* Floating bookmark FAB — mirrors the legacy Legado "+" button
+          that used to live in the reader chrome. Uses the snake_case
+          `book.book_url` field per the IPC contract. */}
+      {book && currentChapter && (
+        <BookmarkButton
+          book={book}
+          chapter={currentChapter}
+          selectedText={selectedText}
+          onAdded={() => showToast(t('reader.bookmarkAdded'))}
+          onError={(msg) => showToast(t('reader.bookmarkAddFailed', { error: msg }))}
+        />
+      )}
+
+      {/* Right-click context menu — rendered at the document root so
+          its absolute position tracks the cursor coordinates directly. */}
+      <ContextMenu
+        state={contextMenu}
+        onClose={() => setContextMenu(null)}
+        buildActions={(kind, text) => {
+          const isText = kind === 'text';
+          const hasText = text.length > 0;
+          type Action = {
+            id: string;
+            labelKey: string;
+            icon?: string;
+            disabled?: boolean;
+            onSelect: () => void;
+          };
+          const items: Action[] = [];
+          if (isText) {
+            items.push({
+              id: 'copy',
+              labelKey: 'reader.contextMenu.copy',
+              icon: '📋',
+              onSelect: () =>
+                navigator.clipboard.writeText(text).then(() => showToast(t('reader.copied'))),
+            });
+            items.push({
+              id: 'bm',
+              labelKey: 'reader.contextMenu.addBookmark',
+              icon: '🔖',
+              disabled: !hasText,
+              onSelect: () => doAddBookmark(text),
+            });
+            items.push({
+              id: 'rep',
+              labelKey: 'reader.contextMenu.addReplace',
+              icon: '🔁',
+              disabled: !hasText,
+              onSelect: () => navigate('/replace-rules', { state: { newPattern: text } }),
+            });
+            items.push({
+              id: 'srch',
+              labelKey: 'reader.contextMenu.searchBook',
+              icon: '🔍',
+              disabled: !hasText,
+              onSelect: () => setSearchKeyword(text),
+            });
+          } else {
+            items.push({
+              id: 'prev',
+              labelKey: 'reader.contextMenu.prevChapter',
+              icon: '◀',
+              disabled: !prevChapter,
+              onSelect: () => prevChapter && goToChapter(prevChapter.index),
+            });
+            items.push({
+              id: 'next',
+              labelKey: 'reader.contextMenu.nextChapter',
+              icon: '▶',
+              disabled: !nextChapter,
+              onSelect: () => nextChapter && goToNextChapter(),
+            });
+            items.push({ id: 'cat', labelKey: 'reader.contextMenu.openCatalog', icon: '≡', onSelect: () => setReaderPanel('catalog') });
+            items.push({ id: 'theme', labelKey: 'reader.contextMenu.cycleTheme', icon: '◐', onSelect: () => cycleTheme() });
+            items.push({ id: 'set', labelKey: 'reader.contextMenu.openSettings', icon: '⚙', onSelect: () => setShowSettings(true) });
+            items.push({ id: 'exit', labelKey: 'reader.contextMenu.exitReader', icon: '↗', onSelect: () => navigate(readerParentPath.current) });
+          }
+          return items;
+        }}
+      />
+
+      {showNavSettings && (
+        <NavSettingsPopover
+          prefs={nav.prefs}
+          onChange={nav.setPrefs}
+          onClose={() => setShowNavSettings(false)}
+        />
+      )}
+
+      <ShortcutsHelpModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+
+      {/* Full-book search panel — opened by the nav-hook search shortcut
+          or by the right-click "Search in Book" item. Stays open across
+          chapter changes so the user can keep an eye on results while
+          we navigate. */}
+      {searchKeyword !== null && (
+        <FullBookSearchPanel
+          bookUrl={book?.book_url ?? ''}
+          initialKeyword={searchKeyword}
+          onJumpTo={(chapterIndex, position, length) => {
+            setSearchKeyword(null);
+            if (chapterIndex !== idx) {
+              goToChapter(chapterIndex);
+            }
+            // Wait for the chapter DOM to mount before attempting to
+            // flash — the navigate() above triggers a content swap.
+            window.setTimeout(() => {
+              flashRange(contentRef.current, position, length);
+            }, 400);
+          }}
+          onClose={() => setSearchKeyword(null)}
+        />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          data-testid="reader-toast"
+          style={{
+            position: 'fixed',
+            bottom: 32,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '8px 16px',
+            borderRadius: 8,
+            background: 'rgba(0, 0, 0, 0.75)',
+            color: '#fff',
+            fontSize: 14,
+            zIndex: 300,
+          }}
+        >
+          {toast}
         </div>
       )}
     </div>

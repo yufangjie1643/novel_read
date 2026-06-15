@@ -498,3 +498,19 @@ export function opSymbol(op: OpHealth): OpSymbol {
   if (op.ok > 0) return 'ok';
   return 'untested';
 }
+
+// --- Per-book WebDAV progress sync ---
+
+export type BookProgressSync = {
+  book_url: string;
+  last_local_time: number;
+  last_remote_time: number;
+  last_synced_at: number;
+  remote_etag: string | null;
+};
+
+export type SyncBookProgressResult =
+  | { status: 'uploaded'; book_url: string; local_time: number; remote_time: number }
+  | { status: 'downloaded'; book_url: string; local_time: number; remote_time: number }
+  | { status: 'skipped'; book_url: string; reason: string }
+  | { status: 'failed'; book_url: string; error: string };

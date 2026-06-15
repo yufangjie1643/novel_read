@@ -211,7 +211,68 @@
     "chapterProgress": "{{current}} / {{total}}",
     "localContentMissing": "Local chapter content missing, please re-import the book",
     "replaceRulesFailed": "Failed to load replace rules",
-    "fetchBookInfoFailed": "Failed to load book info: {{error}}"
+    "fetchBookInfoFailed": "Failed to load book info: {{error}}",
+    "addBookmark": "Add Bookmark",
+    "bookmarkTitle": "Bookmark Title",
+    "bookmarkContent": "Bookmark Content (optional)",
+    "bookmarkAdded": "Bookmark added",
+    "bookmarkAddFailed": "Failed to add bookmark: {{error}}",
+    "copied": "Copied",
+    "sync": {
+      "title": "Cloud Progress",
+      "uploaded": "Progress uploaded",
+      "downloaded": "Progress downloaded",
+      "skipped": "Already in sync",
+      "failed": "Sync failed: {{error}}",
+      "syncNow": "Sync now"
+    },
+    "contextMenu": {
+      "copy": "Copy",
+      "addBookmark": "Add Bookmark",
+      "addReplace": "Add Replace Rule",
+      "searchBook": "Search in Book",
+      "readAloud": "Read Aloud Selection",
+      "dictionaryLookup": "Dictionary Lookup",
+      "prevChapter": "Previous Chapter",
+      "nextChapter": "Next Chapter",
+      "openCatalog": "Open Catalog",
+      "cycleTheme": "Cycle Theme",
+      "openSettings": "Open Settings",
+      "exitReader": "Exit Reader"
+    },
+    "shortcuts": {
+      "title": "Keyboard Shortcuts",
+      "prevNext": "←/→ Previous/Next Chapter",
+      "pageUpDown": "PageUp/PageDown Previous/Next Chapter",
+      "firstLast": "Home/End First/Last Chapter",
+      "scrollDown": "Space Scroll Down",
+      "scrollUp": "Shift+Space Scroll Up",
+      "find": "Ctrl+F Find",
+      "findNext": "F3 / Shift+F3 Next/Previous Match",
+      "bookmark": "Ctrl+D Add Bookmark",
+      "bookmarkList": "Ctrl+Shift+D Bookmark List",
+      "close": "Esc Close / Exit Fullscreen",
+      "fullscreen": "F11 Toggle Fullscreen",
+      "toggleToolbar": "Ctrl+B Toggle Toolbar",
+      "help": "? Show Shortcuts Help"
+    },
+    "nav": {
+      "stickyToolbar": "Persistent Top Toolbar",
+      "autoLoadNext": "Auto-load Next Chapter",
+      "floatingButtons": "Floating Right Buttons",
+      "keyboardShortcuts": "Keyboard Shortcuts"
+    },
+    "fullBookSearch": {
+      "title": "Search in Book",
+      "keyword": "Keyword",
+      "search": "Search",
+      "scanning": "Scanning chapters",
+      "noResults": "No matches found",
+      "cancel": "Cancel",
+      "jumpTo": "Jump to here",
+      "matches": "{{count}} match(es)",
+      "chapterScanned": "Scanned {{scanned}}/{{total}} chapters"
+    }
   },
   "home": {
     "importSource": "Import Source",

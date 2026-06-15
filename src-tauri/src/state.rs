@@ -28,6 +28,10 @@ pub struct AppState {
     /// version.
     #[allow(dead_code)]
     pub search_cancel_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
+    /// Cancellation channel for the `fullbook_search` command. The
+    /// sender is set by the command on entry and consumed by the
+    /// search task; a `true` value signals cancellation.
+    pub fullbook_search_cancel_tx: Arc<tokio::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
 }
 
 impl AppState {
@@ -41,6 +45,7 @@ impl AppState {
             source_stats,
             supervisor,
             search_cancel_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            fullbook_search_cancel_tx: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 }

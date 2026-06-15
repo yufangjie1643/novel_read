@@ -211,7 +211,68 @@
     "chapterProgress": "{{current}} / {{total}}",
     "localContentMissing": "本地章节内容缺失，请重新导入书籍",
     "replaceRulesFailed": "加载替换规则失败",
-    "fetchBookInfoFailed": "获取书籍信息失败：{{error}}"
+    "fetchBookInfoFailed": "获取书籍信息失败：{{error}}",
+    "addBookmark": "添加书签",
+    "bookmarkTitle": "书签标题",
+    "bookmarkContent": "书签内容（可选）",
+    "bookmarkAdded": "书签已添加",
+    "bookmarkAddFailed": "添加书签失败：{{error}}",
+    "copied": "已复制",
+    "sync": {
+      "title": "云端进度",
+      "uploaded": "进度已上传",
+      "downloaded": "进度已下载",
+      "skipped": "无需同步",
+      "failed": "同步失败：{{error}}",
+      "syncNow": "立即同步"
+    },
+    "contextMenu": {
+      "copy": "复制",
+      "addBookmark": "添加书签",
+      "addReplace": "添加替换规则",
+      "searchBook": "在书中搜索",
+      "readAloud": "朗读选中",
+      "dictionaryLookup": "字典查询",
+      "prevChapter": "上一章",
+      "nextChapter": "下一章",
+      "openCatalog": "打开目录",
+      "cycleTheme": "切换主题",
+      "openSettings": "打开设置",
+      "exitReader": "退出阅读"
+    },
+    "shortcuts": {
+      "title": "键盘快捷键",
+      "prevNext": "←/→ 上一章/下一章",
+      "pageUpDown": "PageUp/PageDown 上一章/下一章",
+      "firstLast": "Home/End 第一章/最后一章",
+      "scrollDown": "Space 向下滚动一屏",
+      "scrollUp": "Shift+Space 向上滚动一屏",
+      "find": "Ctrl+F 搜索",
+      "findNext": "F3 / Shift+F3 下一处/上一处",
+      "bookmark": "Ctrl+D 添加书签",
+      "bookmarkList": "Ctrl+Shift+D 书签列表",
+      "close": "Esc 关闭弹层/退出全屏",
+      "fullscreen": "F11 切换全屏",
+      "toggleToolbar": "Ctrl+B 切换顶部工具栏",
+      "help": "? 弹出快捷键帮助"
+    },
+    "nav": {
+      "stickyToolbar": "顶部工具栏常驻",
+      "autoLoadNext": "章末自动加载下一章",
+      "floatingButtons": "右侧浮动按钮",
+      "keyboardShortcuts": "键盘快捷键"
+    },
+    "fullBookSearch": {
+      "title": "全书搜索",
+      "keyword": "搜索关键字",
+      "search": "搜索",
+      "scanning": "正在扫描章节",
+      "noResults": "未找到匹配",
+      "cancel": "取消搜索",
+      "jumpTo": "跳转到此处",
+      "matches": "{{count}} 处匹配",
+      "chapterScanned": "已扫描 {{scanned}}/{{total}} 章"
+    }
   },
   "home": {
     "importSource": "导入书源",

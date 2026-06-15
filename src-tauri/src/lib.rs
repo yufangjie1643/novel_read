@@ -183,12 +183,16 @@ pub fn run() {
             test_webdav_connection,
             backup_to_webdav,
             restore_from_webdav,
+            sync_book_progress,
+            get_book_sync_status,
             // Search supervisor commands
             search_books_stream_v2,
             cancel_search,
             get_last_search,
             update_search_settings,
             cache_cover,
+            // Full-book search
+            fullbook_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
