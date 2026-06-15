@@ -189,6 +189,8 @@ pub fn run() {
             get_last_search,
             update_search_settings,
             cache_cover,
+            // Full-book search
+            fullbook_search,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
