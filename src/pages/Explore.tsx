@@ -163,7 +163,7 @@ export default function Explore() {
         void openLogin(group.sourceUrl);
         return;
       case 'searchThis':
-        navigate('/', { state: { sourceScope: group.sourceUrl } });
+        navigate('/search', { state: { sourceScope: group.sourceUrl } });
         return;
       case 'refresh':
         setKindsBySource((prev) => {
