@@ -37,7 +37,15 @@ export function BookSourceGroup({
   return (
     <div style={{ padding: '4px 0' }}>
       <div
+        role="button"
+        tabIndex={0}
         onClick={handleRowClick}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onToggle();
+          }
+        }}
         {...longPress.onPointerDown}
         onPointerUp={longPress.onPointerUp}
         onPointerCancel={longPress.onPointerCancel}
@@ -83,7 +91,9 @@ export function BookSourceGroup({
         )}
         {showSpinner && (
           <span
-            aria-label="loading"
+            role="status"
+            aria-live="polite"
+            aria-label={t('common.loading')}
             style={{
               width: 16,
               height: 16,
