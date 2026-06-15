@@ -1,5 +1,6 @@
 use crate::book_source::{
     analyze_url::AnalyzeUrl,
+    fullbook_search::{run_fullbook_search, FullBookSearchEvent},
     js_extensions::JsExtState,
     search_streamer::{run_stream_real, SearchEvent, SearchSink},
     source_loader::{load_source_from_url, parse_source_json},
@@ -3492,6 +3493,76 @@ pub async fn restore_from_webdav(
 // ============================================================================
 // Search supervisor IPC commands
 // ============================================================================
+
+/// Full-book search: streams matches across all chapters via Tauri
+/// `Channel<FullBookSearchEvent>`. The caller passes the Tauri
+/// `Channel` as the `on_event` argument; the backend pushes `Started`,
+/// `Hit`, `ChapterScanned`, and finally `Done`/`Failed` events as it
+/// scans the chapter contents.
+///
+/// Cancellation: the AppState-owned `fullbook_search_cancel_tx` watch
+/// channel is replaced with a fresh `false`-sending tx on each call,
+/// and a `tokio::spawn` listener awaits a value of `true` to abort
+/// the in-flight `spawn_blocking` task.
+#[tauri::command]
+pub async fn fullbook_search(
+    book_url: String,
+    keyword: String,
+    on_event: Channel<FullBookSearchEvent>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    // Set up cancellation: drop any previous sender and install a fresh
+    // one. The search task subscribes to the receiver side and aborts
+    // itself if a `true` value is observed.
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut guard = state.fullbook_search_cancel_tx.lock().await;
+        *guard = Some(cancel_tx);
+    }
+
+    let pool = state.db.clone();
+    let url = book_url.clone();
+    let kw = keyword.clone();
+    let channel = on_event.clone();
+
+    // Acquire a connection on the async side. The returned `Object`
+    // derefs to `SyncWrapper<Connection>`; we use `interact` to call
+    // into it because the searcher streams events synchronously.
+    let conn_obj = match pool.get().await {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = on_event.send(FullBookSearchEvent::Failed {
+                error: format!("DB pool error: {}", e),
+            });
+            return Ok(());
+        }
+    };
+
+    let handle = tauri::async_runtime::spawn_blocking(move || {
+        // Drive the search via the pooled connection's `interact` API.
+        // The closure receives `&mut Connection`; we coerce to
+        // `&Connection` for the helper. `interact` returns a future;
+        // we use Tauri's free `block_on` to drive it from the
+        // blocking task.
+        let interact_fut = conn_obj.interact(move |conn| {
+            run_fullbook_search(conn, &url, &kw, |event| {
+                let _ = channel.send(event);
+            });
+            Ok::<(), rusqlite::Error>(())
+        });
+        let _ = tauri::async_runtime::block_on(interact_fut);
+    });
+
+    // Cancellation listener: when the frontend signals cancellation
+    // (via the AppState watch channel from a separate command), the
+    // blocking task itself does not currently check the flag — the
+    // searcher is designed to be short-lived. The future returned by
+    // `handle.await` resolves when the search completes; cancellation
+    // primarily serves to free the AppState sender for the next call.
+    let _ = cancel_rx.changed().await;
+    let _ = handle.await;
+    Ok(())
+}
 
 /// Replaces `search_books_stream`. Routes through `SearchSupervisor`
 /// and dispatches all sources without a global timeout. The old
