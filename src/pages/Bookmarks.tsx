@@ -197,9 +197,7 @@ export default function Bookmarks() {
                     cursor: 'pointer',
                     transition: 'background 0.15s',
                   }}
-                  onClick={() =>
-                    bm.book_url && goToReader(bm.book_url, bm.chapter_index)
-                  }
+                  onClick={() => bm.book_url && goToReader(bm.book_url, bm.chapter_index)}
                   onMouseEnter={(e) => (e.currentTarget.style.background = '#f5f7fa')}
                   onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                 >

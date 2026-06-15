@@ -300,7 +300,9 @@ export default function Bookshelf() {
     let failed = 0;
     for (const book of selectedBookList()) {
       try {
-        const resp = await invoke<ApiResponse<null>>('clear_book_cache', { bookUrl: book.book_url });
+        const resp = await invoke<ApiResponse<null>>('clear_book_cache', {
+          bookUrl: book.book_url,
+        });
         if (!resp.success) failed++;
       } catch {
         failed++;
@@ -536,7 +538,11 @@ export default function Bookshelf() {
             <h1>{t('bookshelf.title')}</h1>
           </div>
           <div className="android-top-actions">
-            <button type="button" aria-label={t('common.search')} onClick={() => navigate('/search')}>
+            <button
+              type="button"
+              aria-label={t('common.search')}
+              onClick={() => navigate('/search')}
+            >
               <img src="/mobile-media/search.svg" alt="" />
             </button>
             <button
@@ -564,7 +570,11 @@ export default function Bookshelf() {
         />
 
         {message && (
-          <div className={message.includes(t('common.error')) ? 'android-message error' : 'android-message'}>
+          <div
+            className={
+              message.includes(t('common.error')) ? 'android-message error' : 'android-message'
+            }
+          >
             {message}
           </div>
         )}
@@ -601,13 +611,25 @@ export default function Bookshelf() {
             <button type="button" onClick={invertBookSelection}>
               {t('bookshelf.invertSelection')}
             </button>
-            <button type="button" onClick={checkSelectedBookInterval} disabled={selectedBooks.size < 2}>
+            <button
+              type="button"
+              onClick={checkSelectedBookInterval}
+              disabled={selectedBooks.size < 2}
+            >
               {t('bookshelf.checkSelectedInterval')}
             </button>
-            <button type="button" onClick={() => batchUpdateCanUpdate(true)} disabled={selectedBooks.size === 0}>
+            <button
+              type="button"
+              onClick={() => batchUpdateCanUpdate(true)}
+              disabled={selectedBooks.size === 0}
+            >
               {t('bookshelf.allowUpdate')}
             </button>
-            <button type="button" onClick={() => batchUpdateCanUpdate(false)} disabled={selectedBooks.size === 0}>
+            <button
+              type="button"
+              onClick={() => batchUpdateCanUpdate(false)}
+              disabled={selectedBooks.size === 0}
+            >
               {t('bookshelf.disableUpdate')}
             </button>
             <button type="button" onClick={batchClearCache} disabled={selectedBooks.size === 0}>
@@ -641,7 +663,9 @@ export default function Bookshelf() {
             <h2>{t('bookshelf.recentReading')}</h2>
             <div>
               <button type="button" onClick={checkUpdates} disabled={checkingUpdates}>
-                {checkingUpdates ? t('bookshelf.checkingUpdatesShort') : t('bookshelf.checkUpdates')}
+                {checkingUpdates
+                  ? t('bookshelf.checkingUpdatesShort')
+                  : t('bookshelf.checkUpdates')}
               </button>
               <button
                 type="button"
@@ -689,7 +713,9 @@ export default function Bookshelf() {
                         toggleBookSelection(book.book_url);
                         return;
                       }
-                      navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
+                      navigate(
+                        `/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`
+                      );
                     }}
                   >
                     {book.cover_url ? (
@@ -709,7 +735,9 @@ export default function Bookshelf() {
                         toggleBookSelection(book.book_url);
                         return;
                       }
-                      navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
+                      navigate(
+                        `/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`
+                      );
                     }}
                   >
                     <h3>{book.name}</h3>
@@ -722,14 +750,18 @@ export default function Bookshelf() {
                   </div>
                   <button
                     type="button"
-                    className={book.dur_chapter_title ? 'android-read-btn' : 'android-read-btn ghost'}
+                    className={
+                      book.dur_chapter_title ? 'android-read-btn' : 'android-read-btn ghost'
+                    }
                     onClick={(event) => {
                       event.stopPropagation();
                       if (batchMode) {
                         toggleBookSelection(book.book_url);
                         return;
                       }
-                      navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
+                      navigate(
+                        `/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`
+                      );
                     }}
                   >
                     {book.dur_chapter_title ? t('common.resume') : t('bookshelf.read')}
@@ -929,10 +961,14 @@ export default function Bookshelf() {
               color: '#555',
             }}
           >
-            <option value="" disabled>{t('bookshelf.moveToGroup')}</option>
+            <option value="" disabled>
+              {t('bookshelf.moveToGroup')}
+            </option>
             <option value={0}>{t('common.none')}</option>
             {groups.map((g) => (
-              <option key={g.group_id} value={g.group_id}>{g.group_name}</option>
+              <option key={g.group_id} value={g.group_id}>
+                {g.group_name}
+              </option>
             ))}
           </select>
           <button
@@ -1026,7 +1062,15 @@ export default function Bookshelf() {
       )}
 
       {/* Group tabs */}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap', alignItems: 'center' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          marginBottom: 20,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        }}
+      >
         <button
           onClick={() => setSelectedGroup(null)}
           style={{
@@ -1247,7 +1291,13 @@ export default function Bookshelf() {
         >
           {filteredBooks.map((book) => {
             const progressPercent = book.total_chapter_num
-              ? Math.min(100, Math.max(0, ((book.dur_chapter_index ?? 0) / Math.max(1, book.total_chapter_num)) * 100))
+              ? Math.min(
+                  100,
+                  Math.max(
+                    0,
+                    ((book.dur_chapter_index ?? 0) / Math.max(1, book.total_chapter_num)) * 100
+                  )
+                )
               : 0;
             return (
               <div
@@ -1260,7 +1310,8 @@ export default function Bookshelf() {
                   display: 'flex',
                   flexDirection: 'column',
                   boxShadow: '0 1px 2px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)',
-                  transition: 'transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease',
+                  transition:
+                    'transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.25s ease',
                   cursor: batchMode ? 'pointer' : 'default',
                   position: 'relative',
                   outline: selectedBooks.has(book.book_url) ? '2.5px solid #1976d2' : 'none',
@@ -1270,11 +1321,13 @@ export default function Bookshelf() {
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.transform = 'translateY(-4px)';
-                  e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.1), 0 2px 6px rgba(0,0,0,0.06)';
+                  e.currentTarget.style.boxShadow =
+                    '0 8px 24px rgba(0,0,0,0.1), 0 2px 6px rgba(0,0,0,0.06)';
                 }}
                 onMouseLeave={(e) => {
                   e.currentTarget.style.transform = 'translateY(0)';
-                  e.currentTarget.style.boxShadow = '0 1px 2px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)';
+                  e.currentTarget.style.boxShadow =
+                    '0 1px 2px rgba(0,0,0,0.06), 0 4px 12px rgba(0,0,0,0.04)';
                 }}
               >
                 {batchMode && (
@@ -1300,7 +1353,9 @@ export default function Bookshelf() {
                       toggleBookSelection(book.book_url);
                       return;
                     }
-                    navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
+                    navigate(
+                      `/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`
+                    );
                   }}
                   style={{
                     cursor: 'pointer',
@@ -1309,50 +1364,18 @@ export default function Bookshelf() {
                   }}
                 >
                   {book.cover_url ? (
-                    <img
-                      src={book.cover_url}
-                      alt={book.name}
-                      className="bookshelf-cover-img"
-                      style={{
-                        width: '100%',
-                        height: 260,
-                        objectFit: 'cover',
-                        display: 'block',
-                        transition: 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
-                      }}
-                      onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.transform = 'scale(1.06)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.transform = 'scale(1)';
-                      }}
+                    <CoverImage
+                      url={book.cover_url}
+                      name={book.name}
+                      author={book.author}
+                      height={260}
                     />
                   ) : (
-                    <div
-                      className="bookshelf-cover-placeholder"
-                      style={{
-                        width: '100%',
-                        height: 260,
-                        background: 'linear-gradient(145deg, #e8eaf6 0%, #f3e5f5 50%, #fce4ec 100%)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: '#5c6bc0',
-                        fontSize: 42,
-                        fontWeight: 800,
-                        letterSpacing: '0.05em',
-                        transition: 'filter 0.3s ease',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.filter = 'brightness(0.97)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.filter = 'brightness(1)';
-                      }}
-                    >
-                      {book.name.slice(0, 2)}
-                    </div>
+                    <PlaceholderCover
+                      name={book.name}
+                      author={book.author}
+                      height={260}
+                    />
                   )}
                   {progressPercent > 0 && (
                     <div
@@ -1377,7 +1400,15 @@ export default function Bookshelf() {
                     </div>
                   )}
                 </div>
-                <div style={{ padding: '14px 16px 16px', display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+                <div
+                  style={{
+                    padding: '14px 16px 16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 6,
+                    flex: 1,
+                  }}
+                >
                   <div
                     onClick={(event) => {
                       event.stopPropagation();
@@ -1385,7 +1416,9 @@ export default function Bookshelf() {
                         toggleBookSelection(book.book_url);
                         return;
                       }
-                      navigate(`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`);
+                      navigate(
+                        `/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`
+                      );
                     }}
                     style={{
                       fontWeight: 700,
@@ -1401,7 +1434,9 @@ export default function Bookshelf() {
                   >
                     {book.name}
                   </div>
-                  <div style={{ color: '#8a8a9a', fontSize: 13, fontWeight: 500 }}>{book.author || book.origin_name || '—'}</div>
+                  <div style={{ color: '#8a8a9a', fontSize: 13, fontWeight: 500 }}>
+                    {book.author || book.origin_name || '—'}
+                  </div>
                   {book.dur_chapter_title && (
                     <div
                       style={{
@@ -1417,7 +1452,15 @@ export default function Bookshelf() {
                       {t('bookshelf.reading', { chapter: book.dur_chapter_title })}
                     </div>
                   )}
-                  <div style={{ marginTop: 'auto', paddingTop: 12, display: 'flex', gap: 8 }}>
+                  <div
+                    style={{
+                      marginTop: 'auto',
+                      paddingTop: 12,
+                      display: 'flex',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
                     <Link
                       to={`/reader/${encodeURIComponent(book.book_url)}/${book.dur_chapter_index ?? 0}`}
                       onClick={(event) => {
@@ -1428,7 +1471,8 @@ export default function Bookshelf() {
                         }
                       }}
                       style={{
-                        flex: 1,
+                        flex: '1 1 auto',
+                        minWidth: 90,
                         textAlign: 'center',
                         padding: '8px 12px',
                         background: '#1976d2',
@@ -1437,6 +1481,7 @@ export default function Bookshelf() {
                         textDecoration: 'none',
                         fontSize: 13,
                         fontWeight: 600,
+                        whiteSpace: 'nowrap',
                         transition: 'all 0.2s ease',
                         boxShadow: '0 2px 8px rgba(25,118,210,0.25)',
                       }}
@@ -1449,10 +1494,13 @@ export default function Bookshelf() {
                         e.currentTarget.style.boxShadow = '0 2px 8px rgba(25,118,210,0.25)';
                       }}
                     >
-                      {book.dur_chapter_title ? t('bookshelf.continueReading') : t('bookshelf.read')}
+                      {book.dur_chapter_title
+                        ? t('bookshelf.continueReading')
+                        : t('bookshelf.read')}
                     </Link>
                     <Link
                       to={`/book/${encodeURIComponent(book.book_url)}`}
+                      state={{ parent: '/' }}
                       onClick={(event) => {
                         if (batchMode) {
                           event.preventDefault();
@@ -1461,6 +1509,8 @@ export default function Bookshelf() {
                         }
                       }}
                       style={{
+                        flex: '1 1 auto',
+                        minWidth: 70,
                         padding: '8px 12px',
                         background: '#f5f7fa',
                         border: '1px solid #e8e8f0',
@@ -1470,6 +1520,7 @@ export default function Bookshelf() {
                         fontSize: 13,
                         color: '#666',
                         fontWeight: 500,
+                        whiteSpace: 'nowrap',
                         transition: 'all 0.2s ease',
                       }}
                       onMouseEnter={(e) => {
@@ -1493,6 +1544,7 @@ export default function Bookshelf() {
                         deleteBook(book.book_url);
                       }}
                       style={{
+                        flex: '0 0 auto',
                         padding: '8px 12px',
                         background: 'transparent',
                         border: '1px solid transparent',
@@ -1500,6 +1552,7 @@ export default function Bookshelf() {
                         cursor: 'pointer',
                         fontSize: 13,
                         color: '#bbb',
+                        whiteSpace: 'nowrap',
                         transition: 'all 0.2s ease',
                       }}
                       onMouseEnter={(e) => {
@@ -1524,4 +1577,173 @@ export default function Bookshelf() {
       )}
     </div>
   );
+}
+
+/// Cover image with a fallback. Tries the remote URL the book source
+/// gave us first; on error or short timeout, switches to a
+/// `PlaceholderCover` so the card never collapses to a text-only sliver.
+function CoverImage({
+  url,
+  name,
+  author,
+  height,
+}: {
+  url: string;
+  name: string;
+  author?: string;
+  height: number;
+}) {
+  const [errored, setErrored] = useState(false);
+  // The Tauri webview doesn't always fire `onError` for failed
+  // remote loads (silent CORS / network drops), so also give up
+  // after a short window and fall back to the placeholder. The
+  // source URL gets a single attempt — we don't retry.
+  useEffect(() => {
+    if (errored) return;
+    const t = setTimeout(() => setErrored(true), 4000);
+    return () => clearTimeout(t);
+  }, [url, errored]);
+
+  if (errored) {
+    return <PlaceholderCover name={name} author={author} height={height} />;
+  }
+  return (
+    <img
+      src={url}
+      alt={name}
+      className="bookshelf-cover-img"
+      style={{
+        width: '100%',
+        height,
+        objectFit: 'cover',
+        display: 'block',
+        background: '#f0f0f5',
+        transition: 'transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+      }}
+      onError={() => setErrored(true)}
+      onLoad={(e) => {
+        const img = e.currentTarget;
+        // naturalWidth === 0 means the image data is empty
+        // (e.g. server returned an HTML error page) — treat as error.
+        if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+          setErrored(true);
+        }
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = 'scale(1.06)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = 'scale(1)';
+      }}
+    />
+  );
+}
+
+/// Generated cover for books that have no `cover_url`. Renders the
+/// title (multi-line) and author as a gradient-tinted book-cover
+/// card. Distinct per book via a hash of the title → background hue.
+/// Pure CSS, no image data is persisted.
+function PlaceholderCover({
+  name,
+  author,
+  height,
+}: {
+  name: string;
+  author?: string;
+  height: number;
+}) {
+  const hue = stringHash(name) % 360;
+  const bg = `linear-gradient(160deg, hsl(${hue}, 55%, 78%) 0%, hsl(${(hue + 35) % 360}, 60%, 70%) 50%, hsl(${(hue + 70) % 360}, 65%, 62%) 100%)`;
+  // Wrap title into ≤3 lines (max ~10 chars per line for the card width).
+  const lines = wrapText(name, 6);
+  const authorText = (author || '').trim();
+  return (
+    <div
+      className="bookshelf-cover-placeholder"
+      style={{
+        width: '100%',
+        height,
+        background: bg,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '18px 14px',
+        boxSizing: 'border-box',
+        color: `hsl(${hue}, 35%, 22%)`,
+        transition: 'filter 0.3s ease',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.filter = 'brightness(0.97)';
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.filter = 'brightness(1)';
+      }}
+    >
+      <div
+        style={{
+          fontSize: 22,
+          fontWeight: 800,
+          letterSpacing: '0.05em',
+          lineHeight: 1.25,
+          textAlign: 'center',
+          textShadow: '0 1px 0 rgba(255,255,255,0.4)',
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+        }}
+      >
+        <div>
+          {lines.map((l, i) => (
+            <div key={i}>{l}</div>
+          ))}
+        </div>
+      </div>
+      {authorText && (
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            opacity: 0.78,
+            textAlign: 'center',
+            maxWidth: '100%',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={authorText}
+        >
+          {authorText}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/// FNV-1a 32-bit string hash. Stable across runs; cheap.
+function stringHash(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/// Greedy wrap: max `maxChars` CJK / English chars per line, ≤
+/// `maxLines` lines. Trailing overflow is dropped (a real cover
+/// would clip, too). For our purposes 3 lines is plenty.
+function wrapText(s: string, maxChars: number): string[] {
+  const out: string[] = [];
+  let buf = '';
+  for (const ch of s) {
+    if (buf.length >= maxChars) {
+      out.push(buf);
+      buf = '';
+      if (out.length >= 3) break;
+    }
+    buf += ch;
+  }
+  if (buf && out.length < 3) out.push(buf);
+  return out.length > 0 ? out : [s.slice(0, 1) || '书'];
 }

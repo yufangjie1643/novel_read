@@ -149,27 +149,74 @@ export default function ReplaceRules() {
       >
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ flex: 1, minWidth: 200 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: '#555', display: 'block', marginBottom: 4 }}>
+            <label
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#555',
+                display: 'block',
+                marginBottom: 4,
+              }}
+            >
               {t('replaceRules.name')}
             </label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              style={inputStyle}
+            />
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: '#555', display: 'block', marginBottom: 4 }}>
+            <label
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#555',
+                display: 'block',
+                marginBottom: 4,
+              }}
+            >
               {t('replaceRules.pattern')} *
             </label>
-            <input type="text" value={pattern} onChange={(e) => setPattern(e.target.value)} style={inputStyle} />
+            <input
+              type="text"
+              value={pattern}
+              onChange={(e) => setPattern(e.target.value)}
+              style={inputStyle}
+            />
           </div>
           <div style={{ flex: 1, minWidth: 200 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: '#555', display: 'block', marginBottom: 4 }}>
+            <label
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#555',
+                display: 'block',
+                marginBottom: 4,
+              }}
+            >
               {t('replaceRules.replacement')}
             </label>
-            <input type="text" value={replacement} onChange={(e) => setReplacement(e.target.value)} style={inputStyle} />
+            <input
+              type="text"
+              value={replacement}
+              onChange={(e) => setReplacement(e.target.value)}
+              style={inputStyle}
+            />
           </div>
         </div>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 4 }}>
           <div style={{ flex: 1, minWidth: 200 }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: '#555', display: 'block', marginBottom: 4 }}>
+            <label
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#555',
+                display: 'block',
+                marginBottom: 4,
+              }}
+            >
               {t('replaceRules.scope')}
             </label>
             <input
@@ -181,7 +228,15 @@ export default function ReplaceRules() {
             />
           </div>
           <div style={{ flex: '0 0 100px' }}>
-            <label style={{ fontSize: 13, fontWeight: 600, color: '#555', display: 'block', marginBottom: 4 }}>
+            <label
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: '#555',
+                display: 'block',
+                marginBottom: 4,
+              }}
+            >
               {t('replaceRules.order')}
             </label>
             <input
@@ -195,12 +250,36 @@ export default function ReplaceRules() {
             />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, paddingTop: 20 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-              <input type="checkbox" checked={isRegex} onChange={(e) => setIsRegex(e.target.checked)} />
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 14,
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={isRegex}
+                onChange={(e) => setIsRegex(e.target.checked)}
+              />
               {t('replaceRules.isRegex')}
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, cursor: 'pointer' }}>
-              <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: 14,
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={enabled}
+                onChange={(e) => setEnabled(e.target.checked)}
+              />
               {t('common.enabled')}
             </label>
           </div>

@@ -1,13 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import { useTranslation } from 'react-i18next';
+import { isTauri } from '../utils/tauri';
 import type { ApiResponse, Book, BookChapter, BookSource, SearchBook } from '../types';
 
 interface PreviewState {
   preview?: boolean;
   source?: BookSource;
   searchBook?: SearchBook;
+  /// Absolute path the user was on when they opened this BookDetail.
+  /// The "← back" button goes here so it returns to the *parent* of
+  /// the detail page (Bookshelf, Explore, Reader, …) rather than the
+  /// browser's last history entry — which can be a deeper sub-page
+  /// (e.g. another chapter in Reader) that isn't actually the parent.
+  parent?: string;
 }
 
 export default function BookDetail() {
@@ -25,6 +33,12 @@ export default function BookDetail() {
   const [chapters, setChapters] = useState<BookChapter[]>([]);
   const [loading, setLoading] = useState(true);
   const [caching, setCaching] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [cacheProgress, setCacheProgress] = useState<{
+    done: number;
+    total: number;
+    chapterTitle: string;
+  } | null>(null);
   const [adding, setAdding] = useState(false);
   const [message, setMessage] = useState('');
   const [chapterFilter, setChapterFilter] = useState('');
@@ -41,7 +55,26 @@ export default function BookDetail() {
         if (chapResp.success && chapResp.data) {
           setChapters(chapResp.data);
           await invoke('add_chapters', { chapters: chapResp.data });
-          setMessage(t('bookDetail.loadedChapters', { count: chapResp.data.length }));
+          if (chapResp.data.length === 0) {
+            // Surface the actual rule the source tried, so the user
+            // can see whether it's a CSS / XPath / regex that just
+            // didn't match this page.
+            let chapterList = '';
+            try {
+              const parsed = JSON.parse(source.rule_toc || '{}');
+              chapterList = parsed.chapterList || '';
+            } catch {
+              /* ignore */
+            }
+            setMessage(
+              t('bookDetail.emptyChapterListWithRule', {
+                source: source.book_source_name,
+                rule: chapterList || '(empty)',
+              })
+            );
+          } else {
+            setMessage(t('bookDetail.loadedChapters', { count: chapResp.data.length }));
+          }
         } else {
           setMessage(t('bookDetail.loadChaptersFailed', { error: chapResp.error || '' }));
         }
@@ -123,7 +156,15 @@ export default function BookDetail() {
       setMessage(t('common.error', { message: String(e) }));
     }
     setLoading(false);
-  }, [decodedUrl, t, fetchChaptersFromSource, isPreview, previewSource, previewSearchBook, loadPreviewBook]);
+  }, [
+    decodedUrl,
+    t,
+    fetchChaptersFromSource,
+    isPreview,
+    previewSource,
+    previewSearchBook,
+    loadPreviewBook,
+  ]);
 
   useEffect(() => {
     loadBookAndChapters();
@@ -153,14 +194,63 @@ export default function BookDetail() {
     navigate(`/reader/${encodeURIComponent(decodedUrl)}/${idx}`);
   }
 
-  async function cacheChapters() {
+  // Configurable cache count, persisted to localStorage.
+  const [cacheCount, setCacheCount] = useState<number>(() => {
+    try {
+      const v = Number.parseInt(localStorage.getItem('cache.count') || '20', 10);
+      if (Number.isFinite(v) && v >= 1 && v <= 10000) return v;
+    } catch {
+      /* ignore */
+    }
+    return 20;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('cache.count', String(cacheCount));
+    } catch {
+      /* ignore */
+    }
+  }, [cacheCount]);
+
+  async function cacheChapters(count: number) {
     if (!book || book.origin === 'local') return;
     setCaching(true);
+    setCacheProgress({ done: 0, total: 0, chapterTitle: '' });
+
+    // Subscribe to per-chapter progress events from the backend.
+    const unlistenRef: { current: (() => void) | null } = { current: null };
+    try {
+      if (isTauri()) {
+        const { listen } = await import('@tauri-apps/api/event');
+        const unlisten = await listen<{
+          book_url: string;
+          book_name: string;
+          done: number;
+          total: number;
+          chapter_index: number;
+          chapter_title: string;
+        }>('cache-progress', (event) => {
+          // Filter to *our* book; multiple books could be caching in parallel.
+          if (event.payload.book_url === decodedUrl) {
+            setCacheProgress({
+              done: event.payload.done,
+              total: event.payload.total,
+              chapterTitle: event.payload.chapter_title,
+            });
+          }
+        });
+        unlistenRef.current = unlisten;
+      }
+    } catch (e) {
+      // Event subscription is best-effort; progress bar just won't update.
+      console.warn('Failed to subscribe cache-progress:', e);
+    }
+
     setMessage(t('bookDetail.caching'));
     try {
       const resp = await invoke<ApiResponse<{ cached_count: number; total_chapters: number }>>(
         'batch_cache_chapters',
-        { bookUrl: decodedUrl, count: 20 }
+        { bookUrl: decodedUrl, count }
       );
       if (resp.success && resp.data) {
         setMessage(
@@ -175,7 +265,86 @@ export default function BookDetail() {
     } catch (e) {
       setMessage(t('common.error', { message: String(e) }));
     }
+
+    if (unlistenRef.current) unlistenRef.current();
+    setCacheProgress(null);
     setCaching(false);
+  }
+
+  async function exportBook() {
+    if (!book || book.origin === 'local') return;
+    setExporting(true);
+    setMessage(t('bookDetail.exporting'));
+    try {
+      const resp = await invoke<
+        ApiResponse<{
+          text: string;
+          filename: string;
+          chapter_count: number;
+          total_chapters: number;
+        }>
+      >('export_book_text', { bookUrl: decodedUrl });
+      if (resp.success && resp.data) {
+        const { text, filename, chapter_count } = resp.data;
+        // Add UTF-8 BOM so Notepad and other Windows tools display Chinese
+        // correctly when opening the file directly.
+        const BOM = '\uFEFF';
+        const blob = new Blob([BOM + text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        // Revoke after a tick so the browser has time to start the download.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+        setMessage(
+          t('bookDetail.exportResult', {
+            count: chapter_count,
+            filename,
+          })
+        );
+      } else {
+        setMessage(t('bookDetail.exportFailed', { error: resp.error || '' }));
+      }
+    } catch (e) {
+      setMessage(t('common.error', { message: String(e) }));
+    }
+    setExporting(false);
+  }
+
+  async function openOriginal() {
+    if (!book) return;
+    // The bookUrl is the source-side TOC page. tocUrl is what Legado
+    // would actually use to fetch chapters; prefer it when set.
+    const url = book.toc_url || book.book_url;
+    if (!url) {
+      setMessage(t('common.error', { message: 'book has no url' }));
+      return;
+    }
+    if (isTauri()) {
+      try {
+        await openUrl(url);
+      } catch (e) {
+        setMessage(t('common.error', { message: String(e) }));
+      }
+    } else {
+      // Browser-mode fallback so devs can click without Tauri runtime.
+      window.open(url, '_blank', 'noopener');
+    }
+  }
+
+  async function openChapterInBrowser(url: string) {
+    if (isTauri()) {
+      try {
+        await openUrl(url);
+      } catch (e) {
+        setMessage(t('common.error', { message: String(e) }));
+      }
+    } else {
+      window.open(url, '_blank', 'noopener');
+    }
   }
 
   if (loading) {
@@ -218,7 +387,22 @@ export default function BookDetail() {
   return (
     <div>
       <button
-        onClick={() => navigate(-1)}
+        onClick={() => {
+          const parent = previewState.parent;
+          // Use the explicit parent recorded by the caller. Only
+          // fall back to history back if the user landed here via
+          // a deep link (no parent recorded) AND the previous entry
+          // is the BookDetail's own URL — that means the user typed
+          // /book/... directly and we have no better idea where to
+          // go. Default to "/" (Bookshelf) in every other ambiguous
+          // case, so we never bounce the user back into a deeper
+          // sub-page like Reader.
+          if (parent) {
+            navigate(parent);
+            return;
+          }
+          navigate('/');
+        }}
         style={{
           marginBottom: 20,
           padding: '6px 14px',
@@ -331,28 +515,195 @@ export default function BookDetail() {
                 onMouseEnter={(e) => (e.currentTarget.style.background = '#1565c0')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = '#1976d2')}
               >
-                {book.dur_chapter_title
-                  ? t('bookshelf.continueReading')
-                  : t('bookshelf.read')}
+                {book.dur_chapter_title ? t('bookshelf.continueReading') : t('bookshelf.read')}
               </button>
             )}
             {book.origin !== 'local' && inBookshelf && (
-              <button
-                onClick={cacheChapters}
-                disabled={caching}
+              <>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    background: '#fff',
+                    border: '1px solid #d0d0d0',
+                    borderRadius: 8,
+                    padding: '2px 10px',
+                  }}
+                >
+                  <span style={{ fontSize: 12, color: '#666' }}>
+                    {t('bookDetail.cacheCountLabel')}
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={cacheCount}
+                    onChange={(e) => {
+                      const v = Number.parseInt(e.target.value, 10);
+                      if (Number.isFinite(v) && v >= 1 && v <= 10000) {
+                        setCacheCount(v);
+                      }
+                    }}
+                    style={{
+                      width: 64,
+                      padding: '4px 6px',
+                      border: 'none',
+                      outline: 'none',
+                      fontSize: 13,
+                      fontFamily: 'inherit',
+                    }}
+                    disabled={caching}
+                  />
+                  <span style={{ fontSize: 12, color: '#666' }}>{t('bookDetail.cacheUnit')}</span>
+                </div>
+                <button
+                  onClick={() => cacheChapters(cacheCount)}
+                  disabled={caching}
+                  style={{
+                    padding: '8px 18px',
+                    background: caching ? '#f5f5f5' : '#e3f2fd',
+                    color: caching ? '#999' : '#1565c0',
+                    border: `1px solid ${caching ? '#e0e0e0' : '#bbdefb'}`,
+                    borderRadius: 8,
+                    cursor: caching ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {caching ? t('bookDetail.cachingShort') : t('bookDetail.cacheChapters')}
+                </button>
+                <button
+                  onClick={() => cacheChapters(10000)}
+                  disabled={caching}
+                  title={t('bookDetail.cacheAllHint')}
+                  style={{
+                    padding: '8px 14px',
+                    background: caching ? '#f5f5f5' : '#fff',
+                    color: caching ? '#999' : '#1565c0',
+                    border: `1px solid ${caching ? '#e0e0e0' : '#bbdefb'}`,
+                    borderRadius: 8,
+                    cursor: caching ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {t('bookDetail.cacheAll')}
+                </button>
+                <button
+                  onClick={exportBook}
+                  disabled={exporting}
+                  title={t('bookDetail.exportHint')}
+                  style={{
+                    padding: '8px 14px',
+                    background: exporting ? '#f5f5f5' : '#fff',
+                    color: exporting ? '#999' : '#1565c0',
+                    border: `1px solid ${exporting ? '#e0e0e0' : '#bbdefb'}`,
+                    borderRadius: 8,
+                    cursor: exporting ? 'not-allowed' : 'pointer',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    transition: 'all 0.2s',
+                  }}
+                >
+                  {exporting ? t('bookDetail.exporting') : t('bookDetail.export')}
+                </button>
+              </>
+            )}
+            {caching && cacheProgress && cacheProgress.total > 0 && (
+              <div
                 style={{
-                  padding: '8px 18px',
-                  background: caching ? '#f5f5f5' : '#e3f2fd',
-                  color: caching ? '#999' : '#1565c0',
-                  border: `1px solid ${caching ? '#e0e0e0' : '#bbdefb'}`,
-                  borderRadius: 8,
-                  cursor: caching ? 'not-allowed' : 'pointer',
-                  fontSize: 13,
-                  fontWeight: 600,
-                  transition: 'all 0.2s',
+                  width: '100%',
+                  marginTop: 4,
+                  background: '#f5f5f5',
+                  borderRadius: 6,
+                  padding: '8px 12px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
                 }}
               >
-                {caching ? t('bookDetail.cachingShort') : t('bookDetail.cacheChapters')}
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    fontSize: 12,
+                    color: '#555',
+                  }}
+                >
+                  <span>
+                    {t('bookDetail.cacheProgress', {
+                      done: cacheProgress.done,
+                      total: cacheProgress.total,
+                    })}
+                  </span>
+                  <span>{Math.round((cacheProgress.done / cacheProgress.total) * 100)}%</span>
+                </div>
+                <div
+                  style={{
+                    height: 8,
+                    background: '#e0e0e0',
+                    borderRadius: 4,
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      height: '100%',
+                      width: `${(cacheProgress.done / cacheProgress.total) * 100}%`,
+                      background: 'linear-gradient(90deg, #1976d2, #42a5f5)',
+                      transition: 'width 0.2s ease',
+                    }}
+                  />
+                </div>
+                {cacheProgress.chapterTitle && (
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: '#888',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {t('bookDetail.cacheCurrent', {
+                      title: cacheProgress.chapterTitle,
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+            {book.book_url && (
+              <button
+                onClick={openOriginal}
+                title={t('bookDetail.openOriginalHint')}
+                style={{
+                  padding: '8px 18px',
+                  background: '#fff',
+                  color: '#555',
+                  border: '1px solid #d0d0d0',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#f5f5f5';
+                  e.currentTarget.style.borderColor = '#999';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#fff';
+                  e.currentTarget.style.borderColor = '#d0d0d0';
+                }}
+              >
+                <span style={{ fontSize: 14 }}>↗</span>
+                {t('bookDetail.openOriginal')}
               </button>
             )}
           </div>
@@ -436,11 +787,55 @@ export default function BookDetail() {
                   fontSize: 14,
                   color: '#333',
                   transition: 'background 0.15s',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
                 }}
                 onMouseEnter={(e) => (e.currentTarget.style.background = '#f5f7fa')}
                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
               >
-                {ch.title}
+                <span
+                  style={{
+                    flex: 1,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {ch.title}
+                </span>
+                {ch.url && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void openChapterInBrowser(ch.url);
+                    }}
+                    title={t('bookDetail.openChapter')}
+                    aria-label={t('bookDetail.openChapter')}
+                    style={{
+                      padding: '2px 8px',
+                      background: 'transparent',
+                      color: '#888',
+                      border: '1px solid transparent',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      fontSize: 12,
+                      lineHeight: 1,
+                      transition: 'all 0.15s',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.color = '#1976d2';
+                      e.currentTarget.style.borderColor = '#bbdefb';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.color = '#888';
+                      e.currentTarget.style.borderColor = 'transparent';
+                    }}
+                  >
+                    ↗
+                  </button>
+                )}
               </div>
             ))}
         </div>

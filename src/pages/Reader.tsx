@@ -1,17 +1,70 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { invoke } from '@tauri-apps/api/core';
 import { useTranslation } from 'react-i18next';
 import type { ApiResponse, Book, BookChapter, BookSource, ReplaceRule } from '../types';
 import { useUiMode } from '../uiMode';
+import ChapterSlider from '../components/reader/ChapterSlider';
+import CatalogPanel from '../components/reader/CatalogPanel';
+import TTSOverlay from '../components/reader/TTSOverlay';
+import TipValue, { readTipKind, TipKind } from '../components/reader/TipValue';
+import TipSettingsSection from '../components/reader/TipSettingsSection';
+import '../styles/reader-animations.css';
 
-const themeStyles: Record<string, { bg: string; text: string; border: string; button: string }> = {
-  light: { bg: '#fff', text: '#1a1a2e', border: '#e8e8f0', button: '#f5f7fa' },
-  dark: { bg: '#1a1a2e', text: '#e0e0e0', border: '#333', button: '#2a2a3e' },
-  sepia: { bg: '#f4ecd8', text: '#5b4636', border: '#d4c5a9', button: '#e8dec0' },
+/// Reader theme — chosen by the FAB theme-cycler button.
+/// `day`   — bright background, dark text (default light reading).
+/// `night` — dark background, light text.
+/// `eink`  — sepia palette tuned for e-ink devices (warm beige + brown).
+///
+/// Each mode persists its own palette via `reader_theme_<mode>_bg/text`
+/// keys so day / night / eink users keep their own per-mode tweaks.
+type ReaderTheme = 'day' | 'night' | 'eink';
+
+/// Page-transition animation style. Mirrors the legacy Legado fork's
+/// `PageAnim` enum (cover / slide / simulation / scroll / none) so the
+/// two clients share the same vocabulary. CSS-transform based — no real
+/// pagination — so the visual is decorative.
+type PageAnim = 'cover' | 'slide' | 'simulation' | 'scroll' | 'none';
+
+const themeStyles: Record<ReaderTheme, { bg: string; text: string; border: string; button: string }> = {
+  day: { bg: '#fff', text: '#1a1a2e', border: '#e8e8f0', button: '#f5f7fa' },
+  night: { bg: '#1a1a2e', text: '#e0e0e0', border: '#333', button: '#2a2a3e' },
+  eink: { bg: '#f4ecd8', text: '#5b4636', border: '#d4c5a9', button: '#e8dec0' },
 };
 
-type ReaderPanel = 'style' | 'more' | 'search' | null;
+const THEME_CYCLE: ReaderTheme[] = ['day', 'night', 'eink'];
+
+/// Detect e-ink-like devices at startup so we can default to the eink
+/// theme if no preference is stored yet. Cheap UA / media-query check.
+function detectEinkDevice(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  if (/kindle|boox|reMarkable|kobo/i.test(ua)) return true;
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    // Reflective displays hint — not yet standardised but harmless to probe.
+    if (window.matchMedia('(reflective: true)').matches) return true;
+  }
+  return false;
+}
+
+/// Convert `#rrggbb` to `r, g, b` so we can wrap it in `rgba(...)` for
+/// the reader's per-mode alpha control. Falls back to the original
+/// string when not a valid 6-digit hex (e.g. named colors — we don't
+/// use those, but defensive).
+function hexToRgb(hex: string): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `${(n >> 16) & 0xff}, ${(n >> 8) & 0xff}, ${n & 0xff}`;
+}
+
+/// Menu state for the mobile bottom sheet.
+/// `null` = sheet collapsed (only the FAB row + slider + menu buttons show).
+/// Other values = an inner panel is rendered inside the sheet. The 4 main
+/// menu buttons each open a different mode; the FAB row "search" button
+/// also opens 'search' (so it can be reached from either place).
+/// `readaloud` is reserved for a future mini-player panel.
+type ReaderPanel = 'style' | 'more' | 'search' | 'catalog' | 'readaloud' | null;
 type WakeLockSentinelLike = { release: () => Promise<void> | void };
 type NavigatorWithWakeLock = Navigator & {
   wakeLock?: { request: (type: 'screen') => Promise<WakeLockSentinelLike> };
@@ -21,10 +74,21 @@ export default function Reader() {
   const { t } = useTranslation();
   const { bookUrl, chapterIndex } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { isMobileUi } = useUiMode();
   const decodedUrl = decodeURIComponent(bookUrl || '');
   const idx = Math.max(0, parseInt(chapterIndex || '0', 10) || 0);
   const contentRef = useRef<HTMLDivElement>(null);
+  // Where we should return when the user leaves the reader for the
+  // book's detail page. Captured on mount so subsequent in-reader
+  // chapter navigation (which mutates location.pathname) doesn't
+  // change the value.
+  const readerParentPath = useRef(location.pathname);
+  useEffect(() => {
+    readerParentPath.current = location.pathname;
+    // intentionally run on mount only
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [book, setBook] = useState<Book | null>(null);
   const [chapters, setChapters] = useState<BookChapter[]>([]);
@@ -39,8 +103,10 @@ export default function Reader() {
   const [fontSize, setFontSize] = useState(() => {
     return parseInt(localStorage.getItem('reader_font_size') || '18', 10);
   });
-  const [theme, setTheme] = useState(() => {
-    return localStorage.getItem('reader_theme') || 'light';
+  const [theme, setTheme] = useState<ReaderTheme>(() => {
+    const stored = (localStorage.getItem('reader_theme') || 'day') as ReaderTheme;
+    if (stored === 'day' || stored === 'night' || stored === 'eink') return stored;
+    return detectEinkDevice() ? 'eink' : 'day';
   });
   const [lineHeight, setLineHeight] = useState(() => {
     return parseFloat(localStorage.getItem('reader_line_height') || '1.8');
@@ -50,8 +116,12 @@ export default function Reader() {
   });
   const [showSettings, setShowSettings] = useState(false);
   const [readerPanel, setReaderPanel] = useState<ReaderPanel>(null);
-  const [pageAnim, setPageAnim] = useState(() => {
-    return localStorage.getItem('reader_page_anim') || 'scroll';
+  const [pageAnim, setPageAnim] = useState<PageAnim>(() => {
+    const raw = localStorage.getItem('reader_page_anim');
+    if (raw === 'cover' || raw === 'slide' || raw === 'simulation' || raw === 'scroll' || raw === 'none') {
+      return raw;
+    }
+    return 'scroll';
   });
   const [useReplaceRules, setUseReplaceRules] = useState(() => {
     return localStorage.getItem('reader_use_replace_rules') !== 'false';
@@ -74,6 +144,14 @@ export default function Reader() {
     return Number.isFinite(stored) ? stored : 2800;
   });
   const [readerSearchQuery, setReaderSearchQuery] = useState('');
+  /// Live ordered list of every <mark data-rs> element created by the
+  /// most recent runReaderSearch(). goToMatch() walks this list.
+  const searchMarksRef = useRef<HTMLElement[]>([]);
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
+  const [totalSearchMatches, setTotalSearchMatches] = useState(0);
+  /// Mirror of activeMatchIndex so the keydown handler can read the
+  /// latest value without re-binding on every state change.
+  const activeMatchIndexRef = useRef(0);
 
   const [fontFamily, setFontFamily] = useState(() => {
     return localStorage.getItem('reader_font_family') || 'system';
@@ -83,6 +161,13 @@ export default function Reader() {
   });
   const [contentWidth, setContentWidth] = useState(() => {
     return parseInt(localStorage.getItem('reader_content_width') || '760', 10);
+  });
+  /// Background opacity 0-100. 100 = solid theme bg; 0 = transparent
+  /// (shows the body background bleeding through). Persisted per-mode
+  /// would be nicer but for v1 we keep one global value.
+  const [bgAlpha, setBgAlpha] = useState(() => {
+    const raw = parseInt(localStorage.getItem('reader_bg_alpha') || '100', 10);
+    return Number.isFinite(raw) ? Math.max(0, Math.min(100, raw)) : 100;
   });
 
   const [headerVisible, setHeaderVisible] = useState(() => !isMobileUi);
@@ -97,7 +182,52 @@ export default function Reader() {
   const [ttsRate, setTtsRate] = useState(() => {
     return parseFloat(localStorage.getItem('reader_tts_rate') || '1');
   });
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  /// TTS overlay state — surfaces the mini-player UI in TTSOverlay.
+  const [ttsOverlayOpen, setTtsOverlayOpen] = useState(false);
+  const [ttsChunkIndex, setTtsChunkIndex] = useState(0);
+  const [ttsTotalChunks, setTtsTotalChunks] = useState(0);
+  const [ttsCurrentText, setTtsCurrentText] = useState('');
+  /// Refs to the chunk list and current index that live inside the
+  /// `startTTS` closure (so the speech chain can iterate). The refs
+  /// let us keep a single startTTS() body while still letting the
+  /// overlay read the live values.
+  const ttsChunksRef = useRef<string[]>([]);
+  const ttsIndexRef = useRef(0);
+  /// Tip-slot state for the reader chrome (Block 1-4). We keep
+  /// these in React state so the chrome re-renders on change, but
+  /// the values are also persisted to localStorage so user changes
+  /// survive a reload.
+  const [tipHeaderLeft, setTipHeaderLeft] = useState<TipKind>(() => readTipKind('reader_tip_header_left', 1));
+  const [tipHeaderRight, setTipHeaderRight] = useState<TipKind>(() => readTipKind('reader_tip_header_right', 2));
+  const [tipFooterLeft, setTipFooterLeft] = useState<TipKind>(() => readTipKind('reader_tip_footer_left', 5));
+  const [tipFooterRight, setTipFooterRight] = useState<TipKind>(() => readTipKind('reader_tip_footer_right', 7));
+  const [tipScrollPct, setTipScrollPct] = useState(0);
+  useEffect(() => {
+    function recompute() {
+      const max = Math.max(1, document.documentElement.scrollHeight - window.innerHeight);
+      setTipScrollPct(Math.max(0, Math.min(100, (window.scrollY / max) * 100)));
+    }
+    window.addEventListener('scroll', recompute, { passive: true });
+    window.addEventListener('resize', recompute);
+    recompute();
+    return () => {
+      window.removeEventListener('scroll', recompute);
+      window.removeEventListener('resize', recompute);
+    };
+  }, []);
+  /// Listen for synthetic 'storage' events from TipSettingsSection
+  /// so the user can re-pick a slot value and the chrome re-renders
+  /// without a full page reload.
+  useEffect(() => {
+    function sync() {
+      setTipHeaderLeft(readTipKind('reader_tip_header_left', 1));
+      setTipHeaderRight(readTipKind('reader_tip_header_right', 2));
+      setTipFooterLeft(readTipKind('reader_tip_footer_left', 5));
+      setTipFooterRight(readTipKind('reader_tip_footer_right', 7));
+    }
+    window.addEventListener('storage', sync);
+    return () => window.removeEventListener('storage', sync);
+  }, []);
   const readTimeRef = useRef(0);
   const readTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const bookRef = useRef<Book | null>(null);
@@ -106,6 +236,17 @@ export default function Reader() {
   const prevChapterRef = useRef(prevChapter);
   const nextChapterRef = useRef(nextChapter);
   const loadSeqRef = useRef(0);
+  /// In-memory cache of the next chapter's content. Populated when the
+  /// current chapter finishes loading so switching to the next chapter
+  /// is instantaneous. Cleared when the user navigates away from the
+  /// adjacent next index (e.g. they jump chapters).
+  const prefetchedNextRef = useRef<{ index: number; content: string } | null>(null);
+  const prefetchSeqRef = useRef(0);
+  /// Debounce plumbing for saveProgress. We only want to write the
+  /// last chapter of a fast burst to the DB, not every intermediate
+  /// one.
+  const pendingProgressRef = useRef<Book | null>(null);
+  const progressSaveTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     bookRef.current = book;
@@ -152,7 +293,7 @@ export default function Reader() {
     async function requestWakeLock() {
       if (!keepScreenAwake || document.visibilityState !== 'visible') return;
       try {
-        wakeLock = await (navigator as NavigatorWithWakeLock).wakeLock?.request('screen') ?? null;
+        wakeLock = (await (navigator as NavigatorWithWakeLock).wakeLock?.request('screen')) ?? null;
         if (cancelled) {
           await wakeLock?.release();
         }
@@ -267,25 +408,36 @@ export default function Reader() {
       .split(/\n+/)
       .map((s) => s.trim())
       .filter((s) => s.length > 0);
-    let currentIndex = 0;
+    if (chunks.length === 0) return;
+    ttsChunksRef.current = chunks;
+    ttsIndexRef.current = 0;
+    setTtsTotalChunks(chunks.length);
+    setTtsChunkIndex(0);
+    setTtsCurrentText(chunks[0]);
+    setTtsOverlayOpen(true);
     function speakNext() {
-      if (currentIndex >= chunks.length) {
+      if (ttsIndexRef.current >= ttsChunksRef.current.length) {
         setIsSpeaking(false);
         setIsPaused(false);
+        setTtsOverlayOpen(false);
         return;
       }
-      const utterance = new SpeechSynthesisUtterance(chunks[currentIndex]);
+      const utterance = new SpeechSynthesisUtterance(ttsChunksRef.current[ttsIndexRef.current]);
       utterance.rate = ttsRate;
       utterance.lang = 'zh-CN';
+      utterance.onstart = () => {
+        setTtsChunkIndex(ttsIndexRef.current);
+        setTtsCurrentText(ttsChunksRef.current[ttsIndexRef.current]);
+      };
       utterance.onend = () => {
-        currentIndex++;
+        ttsIndexRef.current += 1;
         speakNext();
       };
       utterance.onerror = () => {
         setIsSpeaking(false);
         setIsPaused(false);
+        setTtsOverlayOpen(false);
       };
-      utteranceRef.current = utterance;
       window.speechSynthesis.speak(utterance);
     }
     setIsSpeaking(true);
@@ -325,14 +477,50 @@ export default function Reader() {
       dur_chapter_pos: 0,
       dur_chapter_time: Date.now(),
     };
-    try {
-      await invoke('update_book', { book: updatedBook });
-      setBook(updatedBook);
-      bookRef.current = updatedBook;
-    } catch (e) {
-      console.error('Failed to save progress:', e);
-    }
+    // Debounce rapid chapter changes (slider scrub, fast next/next) so
+    // we only persist once per ~600ms burst. The final chapter is
+    // always flushed in the beforeunload handler below.
+    pendingProgressRef.current = updatedBook;
+    if (progressSaveTimerRef.current !== null) return;
+    progressSaveTimerRef.current = window.setTimeout(() => {
+      progressSaveTimerRef.current = null;
+      const toSave = pendingProgressRef.current;
+      pendingProgressRef.current = null;
+      if (!toSave) return;
+      invoke('update_book', { book: toSave }).then(
+        () => {
+          setBook(toSave);
+          bookRef.current = toSave;
+        },
+        (e) => console.error('Failed to save progress:', e)
+      );
+    }, 600);
   }
+
+  /// Flush any pending debounced progress save on tab close / refresh
+  /// so the user doesn't lose their last chapter.
+  useEffect(() => {
+    function flush() {
+      const toSave = pendingProgressRef.current;
+      pendingProgressRef.current = null;
+      if (progressSaveTimerRef.current !== null) {
+        window.clearTimeout(progressSaveTimerRef.current);
+        progressSaveTimerRef.current = null;
+      }
+      if (!toSave) return;
+      // Fire-and-forget IPC — the Tauri runtime will deliver it
+      // synchronously enough for an unload-time write.
+      void invoke('update_book', { book: toSave }).catch((e) =>
+        console.error('Failed to flush progress:', e)
+      );
+    }
+    window.addEventListener('beforeunload', flush);
+    window.addEventListener('pagehide', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      window.removeEventListener('pagehide', flush);
+    };
+  }, []);
 
   async function loadChaptersFromSource(
     activeBook: Book,
@@ -357,6 +545,23 @@ export default function Reader() {
     if (seq !== loadSeqRef.current) return null;
     if (chapResp.success && chapResp.data) {
       await invoke('add_chapters', { chapters: chapResp.data });
+      if (chapResp.data.length === 0) {
+        // Surface the actual rule that was tried so the user can
+        // diagnose the source without opening devtools.
+        let chapterList = '';
+        try {
+          const parsed = JSON.parse(source.rule_toc || '{}');
+          chapterList = parsed.chapterList || '';
+        } catch {
+          /* ignore */
+        }
+        setMessage(
+          t('bookDetail.emptyChapterListWithRule', {
+            source: source.book_source_name,
+            rule: chapterList || '(empty)',
+          })
+        );
+      }
       return chapResp.data;
     }
     setMessage(t('reader.loadChaptersFailed', { error: chapResp.error || '' }));
@@ -373,6 +578,15 @@ export default function Reader() {
     setMessage(t('reader.loadingContent'));
     const activeBookUrl = activeBook?.book_url || decodedUrl;
     try {
+      // Fast path: the prefetcher may have stashed this chapter already.
+      const prefetched = prefetchedNextRef.current;
+      if (prefetched && prefetched.index === index) {
+        prefetchedNextRef.current = null;
+        setContent(prefetched.content);
+        setMessage('');
+        await saveProgress(index, activeBook, activeChapters);
+        return;
+      }
       const cacheResp = await invoke<ApiResponse<string | null>>('get_local_chapter_content', {
         bookUrl: activeBookUrl,
         chapterIndex: index,
@@ -435,7 +649,19 @@ export default function Reader() {
         await saveProgress(index, activeBook, activeChapters);
       } else {
         if (seq === loadSeqRef.current) {
-          setMessage(t('reader.loadContentFailed', { error: resp.error || '' }));
+          // Truncate the raw error so the message stays readable.
+          // The full error is in the source's `last_chapter_content_error`
+          // health column for power users to inspect.
+          const raw = resp.error || '';
+          const maxLen = 240;
+          const truncated =
+            raw.length > maxLen ? raw.slice(0, maxLen) + '…' : raw;
+          setMessage(
+            t('reader.loadContentFailedWithSource', {
+              source: source.book_source_name,
+              error: truncated,
+            })
+          );
         }
       }
     } catch (e) {
@@ -487,6 +713,51 @@ export default function Reader() {
           setReplaceRules(rulesResp.data);
         }
         await loadContent(idx, seq, loadedBook, loadedChapters);
+
+        // Pre-download the next chapter in the background. Best-effort —
+        // any failure just means the next chapter will fetch normally on
+        // demand. We invalidate any stale prefetch from a previous
+        // mount by clearing the ref and bumping the prefetch seq.
+        prefetchSeqRef.current += 1;
+        prefetchedNextRef.current = null;
+        if (loadedBook && loadedBook.origin !== 'local' && loadedChapters.length > idx + 1) {
+          const nextChapter = loadedChapters[idx + 1];
+          const mySeq = prefetchSeqRef.current;
+          void (async () => {
+            try {
+              const cached = await invoke<ApiResponse<string | null>>('get_local_chapter_content', {
+                bookUrl: decodedUrl,
+                chapterIndex: nextChapter.index,
+              });
+              if (mySeq !== prefetchSeqRef.current) return;
+              if (cached.success && typeof cached.data === 'string' && cached.data.length > 0) {
+                prefetchedNextRef.current = { index: nextChapter.index, content: cached.data };
+                return;
+              }
+              // Network fetch for prefetch — reuse the source list lookup.
+              const sourcesResp = await invoke<ApiResponse<BookSource[]>>('get_book_sources');
+              if (mySeq !== prefetchSeqRef.current) return;
+              const source = sourcesResp.data?.find((s) => s.book_source_url === loadedBook.origin);
+              if (!source) return;
+              const resp = await invoke<ApiResponse<string>>('fetch_chapter_content', {
+                source,
+                book: { ...loadedBook, dur_chapter_index: nextChapter.index },
+                chapter: nextChapter,
+              });
+              if (mySeq !== prefetchSeqRef.current) return;
+              if (resp.success && typeof resp.data === 'string') {
+                prefetchedNextRef.current = { index: nextChapter.index, content: resp.data };
+                void invoke('save_local_chapter_content', {
+                  bookUrl: decodedUrl,
+                  chapterIndex: nextChapter.index,
+                  content: resp.data,
+                }).catch(() => {});
+              }
+            } catch {
+              /* ignore prefetch failures */
+            }
+          })();
+        }
       } catch (e) {
         if (seq === loadSeqRef.current) {
           setMessage(t('common.error', { message: String(e) }));
@@ -497,6 +768,15 @@ export default function Reader() {
       }
     }
     loadData();
+    // Bump the seq on cleanup too — the next effect run will
+    // also bump, but if the component unmounts while the inflight
+    // request is in flight, the new cleanup catches the unmount
+    // path and the seq check inside the async body short-circuits
+    // any state writes.
+    return () => {
+      loadSeqRef.current += 1;
+      prefetchSeqRef.current += 1;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [decodedUrl, idx]);
 
@@ -637,15 +917,41 @@ export default function Reader() {
       const end = Math.min(line.length, matchIndex + query.length + 42);
       const prefix = start > 0 ? '...' : '';
       const suffix = end < line.length ? '...' : '';
-      results.push({ key: `${lineIndex}-${matchIndex}`, text: `${prefix}${line.slice(start, end)}${suffix}` });
+      results.push({
+        key: `${lineIndex}-${matchIndex}`,
+        text: `${prefix}${line.slice(start, end)}${suffix}`,
+      });
     });
     return results.slice(0, 24);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readerSearchQuery, content, replaceRules, useReplaceRules, book?.book_url]);
 
+  /// Page-transition phase. `fading-out` is the brief window where the
+  /// current content plays the out-animation before the chapter URL
+  /// flips; `fading-in` is the window where the new content plays the
+  /// in-animation. `idle` = no transition active.
+  const [transitionPhase, setTransitionPhase] = useState<'idle' | 'fading-out' | 'fading-in'>('idle');
+
   function goToChapter(index: number) {
-    navigate(`/reader/${encodeURIComponent(decodedUrl)}/${index}`);
-    window.scrollTo(0, 0);
+    if (transitionPhase !== 'idle') return;
+    if (index === idx) return;
+    // If the user picked a non-decorative animation, fade out first.
+    // For scroll/none we keep the existing instant behaviour — no point
+    // adding latency when there's no transform to animate.
+    if (pageAnim === 'scroll' || pageAnim === 'none') {
+      navigate(`/reader/${encodeURIComponent(decodedUrl)}/${index}`);
+      window.scrollTo(0, 0);
+      return;
+    }
+    setTransitionPhase('fading-out');
+    // Wait long enough for the CSS keyframe (max 450ms in our stylesheet)
+    // to mostly finish, then push the URL and trigger the in animation.
+    window.setTimeout(() => {
+      navigate(`/reader/${encodeURIComponent(decodedUrl)}/${index}`);
+      window.scrollTo(0, 0);
+      setTransitionPhase('fading-in');
+      window.setTimeout(() => setTransitionPhase('idle'), 450);
+    }, 220);
   }
 
   function scrollReaderPage(direction: 1 | -1) {
@@ -710,8 +1016,92 @@ export default function Reader() {
   function runReaderSearch() {
     const query = readerSearchQuery.trim();
     if (!query) return;
-    const finder = window as Window & { find?: (text: string) => boolean };
-    finder.find?.(query);
+    // Tauri WebView / modern Chromium have no `window.find` — highlight
+    // matches directly inside the rendered chapter DOM and scroll the
+    // first match into view. We replace any earlier search highlight
+    // span we tagged so we can clean them up on the next query.
+    const root = contentRef.current;
+    if (!root) return;
+    // Clear previous highlights.
+    root.querySelectorAll('mark[data-rs]').forEach((m) => {
+      const parent = m.parentNode;
+      if (!parent) return;
+      while (m.firstChild) parent.insertBefore(m.firstChild, m);
+      parent.removeChild(m);
+      parent.normalize();
+    });
+    const lower = query.toLowerCase();
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const targets: Text[] = [];
+    let node = walker.nextNode();
+    while (node) {
+      if (node.nodeValue && node.nodeValue.toLowerCase().includes(lower)) {
+        targets.push(node as Text);
+      }
+      node = walker.nextNode();
+    }
+    if (targets.length === 0) {
+      searchMarksRef.current = [];
+      setTotalSearchMatches(0);
+      setActiveMatchIndex(0);
+      return;
+    }
+    const marks: HTMLElement[] = [];
+    targets.forEach((textNode) => {
+      const value = textNode.nodeValue ?? '';
+      const lowerValue = value.toLowerCase();
+      let cursor = 0;
+      const frag = document.createDocumentFragment();
+      while (true) {
+        const idx = lowerValue.indexOf(lower, cursor);
+        if (idx < 0) {
+          if (cursor < value.length) frag.appendChild(document.createTextNode(value.slice(cursor)));
+          break;
+        }
+        if (idx > cursor) frag.appendChild(document.createTextNode(value.slice(cursor, idx)));
+        const mark = document.createElement('mark');
+        mark.setAttribute('data-rs', '1');
+        mark.style.background = 'rgba(255, 235, 59, 0.55)';
+        mark.style.color = 'inherit';
+        mark.appendChild(document.createTextNode(value.slice(idx, idx + lower.length)));
+        frag.appendChild(mark);
+        marks.push(mark);
+        cursor = idx + lower.length;
+      }
+      const parent = textNode.parentNode;
+      if (parent) {
+        parent.replaceChild(frag, textNode);
+      }
+    });
+    searchMarksRef.current = marks;
+    setTotalSearchMatches(marks.length);
+    activeMatchIndexRef.current = 0;
+    setActiveMatchIndex(0);
+    if (marks[0]) {
+      marks[0].setAttribute('data-rs-active', '1');
+      marks[0].style.background = 'rgba(255, 152, 0, 0.7)';
+      marks[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+
+  /// Step the active match index, modulo the total count, and scroll
+  /// the new active mark into view. The previous mark loses its
+  /// active highlight.
+  function goToMatch(idx: number) {
+    const marks = searchMarksRef.current;
+    if (marks.length === 0) return;
+    const next = ((idx % marks.length) + marks.length) % marks.length;
+    const prev = marks[activeMatchIndexRef.current];
+    if (prev) {
+      prev.removeAttribute('data-rs-active');
+      prev.style.background = 'rgba(255, 235, 59, 0.55)';
+    }
+    const target = marks[next];
+    target.setAttribute('data-rs-active', '1');
+    target.style.background = 'rgba(255, 152, 0, 0.7)';
+    activeMatchIndexRef.current = next;
+    setActiveMatchIndex(next);
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
 
   useEffect(() => {
@@ -745,7 +1135,9 @@ export default function Reader() {
           }
           break;
         case 'Escape':
-          navigate(`/book/${encodeURIComponent(decodedUrl)}`);
+          navigate(`/book/${encodeURIComponent(decodedUrl)}`, {
+            state: { parent: readerParentPath.current },
+          });
           break;
         case ' ':
           e.preventDefault();
@@ -785,6 +1177,10 @@ export default function Reader() {
           if (isSpeakingRef.current) stopTTS();
           else startTTS();
           break;
+        case 'F3':
+          e.preventDefault();
+          goToMatch(activeMatchIndex + (e.shiftKey ? -1 : 1));
+          break;
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -793,7 +1189,14 @@ export default function Reader() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const tStyle = themeStyles[theme] || themeStyles.light;
+  const tStyleBase = themeStyles[theme] || themeStyles.day;
+  /// Apply the global background alpha to the theme's `bg` color so the
+  /// content area can be made translucent (e.g. for showing an
+  /// underlying paper texture or letting a custom image bleed through).
+  const tStyle = {
+    ...tStyleBase,
+    bg: `rgba(${hexToRgb(tStyleBase.bg)}, ${bgAlpha / 100})`,
+  };
 
   const btnStyle = (active?: boolean): React.CSSProperties => ({
     padding: isMobileUi ? '7px 10px' : '6px 14px',
@@ -814,7 +1217,7 @@ export default function Reader() {
     Math.max(0, ((idx + 1) / Math.max(1, chapters.length)) * 100)
   );
 
-  function updatePageAnim(mode: string) {
+  function updatePageAnim(mode: PageAnim) {
     setPageAnim(mode);
     localStorage.setItem('reader_page_anim', mode);
   }
@@ -831,7 +1234,7 @@ export default function Reader() {
     fontWeight: 600,
     display: 'grid',
     placeItems: 'center',
-    boxShadow: theme === 'dark' ? '0 4px 14px rgba(0,0,0,0.35)' : '0 4px 14px rgba(0,0,0,0.08)',
+    boxShadow: theme === 'night' ? '0 4px 14px rgba(0,0,0,0.35)' : '0 4px 14px rgba(0,0,0,0.08)',
     cursor: 'pointer',
     opacity: active ? 1 : 0.9,
     transition: 'all 0.2s ease',
@@ -886,6 +1289,50 @@ export default function Reader() {
         overflowX: 'hidden',
       }}
     >
+      {/* TTS mini player overlay — opens when reading aloud starts. */}
+      <TTSOverlay
+        visible={ttsOverlayOpen}
+        bookTitle={book?.name ?? ''}
+        chapterTitle={currentChapter?.title ?? ''}
+        currentText={ttsCurrentText}
+        currentChunkIndex={ttsChunkIndex}
+        totalChunks={ttsTotalChunks}
+        isPlaying={isSpeaking}
+        isPaused={isPaused}
+        rate={ttsRate}
+        onClose={() => {
+          stopTTS();
+          setTtsOverlayOpen(false);
+        }}
+        onPlayPause={() => {
+          if (isPaused) {
+            resumeTTS();
+          } else if (isSpeaking) {
+            pauseTTS();
+          } else {
+            startTTS();
+          }
+        }}
+        onStop={() => {
+          stopTTS();
+          setTtsOverlayOpen(false);
+        }}
+        onAdjustRate={(delta) => {
+          setTtsRate((r) => {
+            const next = Math.max(0.5, Math.min(2, r + delta));
+            localStorage.setItem('reader_tts_rate', String(next));
+            return next;
+          });
+        }}
+        onPrevChapter={prevChapter ? () => { stopTTS(); turnPrevious(); } : undefined}
+        onNextChapter={nextChapter ? () => { stopTTS(); turnNext(); } : undefined}
+        theme={{
+          bg: tStyle.bg,
+          text: tStyle.text,
+          border: tStyle.border,
+          button: tStyle.button,
+        }}
+      />
       {/* Fixed header: toolbar + settings with immersive hide/show */}
       <div
         style={{
@@ -897,7 +1344,9 @@ export default function Reader() {
           background: tStyle.bg,
           transform: headerVisible ? 'translateY(0)' : 'translateY(-100%)',
           transition: 'transform 0.25s ease',
-          boxShadow: headerVisible ? `0 2px 8px ${theme === 'dark' ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.06)'}` : 'none',
+          boxShadow: headerVisible
+            ? `0 2px 8px ${theme === 'night' ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.06)'}`
+            : 'none',
         }}
       >
         {/* Toolbar — ReadAny-style: left controls | center title | right controls */}
@@ -917,13 +1366,27 @@ export default function Reader() {
           }}
         >
           {/* Left */}
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0, flexShrink: 0 }}>
+          <div
+            style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0, flexShrink: 0 }}
+          >
             <button
-              onClick={() => navigate(`/book/${encodeURIComponent(decodedUrl)}`)}
+              onClick={() =>
+                isMobileUi
+                  ? openReaderPanel('catalog')
+                  : setReaderPanel(readerPanel === 'catalog' ? null : 'catalog')
+              }
               style={btnStyle()}
             >
               {t('reader.chapters')}
             </button>
+            <TipValue
+              kind={tipHeaderLeft}
+              chapterTitle={currentChapter?.title}
+              bookName={book?.name}
+              scrollPct={tipScrollPct}
+              chapterProgressPct={chapterProgressPercent}
+              color={tStyle.text}
+            />
           </div>
 
           {/* Center: chapter title (absolute on desktop to truly center) */}
@@ -974,28 +1437,21 @@ export default function Reader() {
               flexShrink: 0,
             }}
           >
+            <TipValue
+              kind={tipHeaderRight}
+              chapterTitle={currentChapter?.title}
+              bookName={book?.name}
+              scrollPct={tipScrollPct}
+              chapterProgressPct={chapterProgressPercent}
+              color={tStyle.text}
+            />
             {isSpeaking ? (
-              <>
-                {isPaused ? (
-                  <button onClick={resumeTTS} style={btnStyle()}>
-                    {t('common.resume')}
-                  </button>
-                ) : (
-                  <button onClick={pauseTTS} style={btnStyle()}>
-                    {t('common.pause')}
-                  </button>
-                )}
-                <button
-                  onClick={stopTTS}
-                  style={{
-                    ...btnStyle(),
-                    color: '#f44336',
-                    borderColor: '#ffcdd2',
-                  }}
-                >
-                  {t('common.stop')}
-                </button>
-              </>
+              <button
+                onClick={isPaused ? resumeTTS : pauseTTS}
+                style={btnStyle(true)}
+              >
+                {isPaused ? t('common.resume') : t('common.pause')}
+              </button>
             ) : (
               <button onClick={startTTS} disabled={!content} style={btnStyle()}>
                 {t('reader.tts')}
@@ -1065,13 +1521,15 @@ export default function Reader() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>翻页：</span>
               {[
-                { key: 'scroll', label: t('reader.pageAnimScroll') },
+                { key: 'cover', label: t('reader.pageAnimCover') },
                 { key: 'slide', label: t('reader.pageAnimSlide') },
+                { key: 'simulation', label: t('reader.pageAnimSimulation') },
+                { key: 'scroll', label: t('reader.pageAnimScroll') },
                 { key: 'none', label: t('reader.pageAnimNone') },
               ].map((item) => (
                 <button
                   key={item.key}
-                  onClick={() => updatePageAnim(item.key)}
+                  onClick={() => updatePageAnim(item.key as PageAnim)}
                   style={pageAnim === item.key ? btnStyle(true) : btnStyle()}
                 >
                   {item.label}
@@ -1080,7 +1538,9 @@ export default function Reader() {
             </div>
             {/* Font size slider */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.fontSize')}</span>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.fontSize')}
+              </span>
               <input
                 type="range"
                 min={12}
@@ -1099,8 +1559,10 @@ export default function Reader() {
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.theme')}</span>
-              {['light', 'dark', 'sepia'].map((tName) => (
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.theme')}
+              </span>
+              {THEME_CYCLE.map((tName) => (
                 <button
                   key={tName}
                   onClick={() => {
@@ -1109,12 +1571,14 @@ export default function Reader() {
                   }}
                   style={theme === tName ? btnStyle(true) : btnStyle()}
                 >
-                  {t(`reader.theme${tName.charAt(0).toUpperCase() + tName.slice(1)}`)}
+                  {t(`reader.themeCycle.${tName}`)}
                 </button>
               ))}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.ttsSpeed')}</span>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.ttsSpeed')}
+              </span>
               <input
                 type="range"
                 min="0.5"
@@ -1131,7 +1595,9 @@ export default function Reader() {
               <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>{ttsRate}x</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.lineHeight')}</span>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.lineHeight')}
+              </span>
               <input
                 type="range"
                 min={1.2}
@@ -1150,7 +1616,9 @@ export default function Reader() {
               </span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.paragraphSpacing')}</span>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.paragraphSpacing')}
+              </span>
               <input
                 type="range"
                 min={0}
@@ -1170,7 +1638,9 @@ export default function Reader() {
             </div>
             {/* Font family */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.fontFamily')}</span>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.fontFamily')}
+              </span>
               {[
                 { key: 'system', label: t('reader.fontFamilySystem') },
                 { key: 'serif', label: t('reader.fontFamilySerif') },
@@ -1188,9 +1658,52 @@ export default function Reader() {
                 </button>
               ))}
             </div>
+            {/* Header / Footer tip slots — 4 visible slots. Middle
+                slots are stored in localStorage but not rendered on
+                web (no 5th position exists). */}
+            <div style={{ display: 'grid', gap: 6, gridColumn: '1 / -1' }}>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.tipHeaderLeft').split(' ')[0] === t('reader.tipHeaderLeft')
+                  ? t('reader.interfaceSetting')
+                  : 'Header / Footer tips'}
+              </span>
+              <TipSettingsSection
+                headerLeft={tipHeaderLeft}
+                headerRight={tipHeaderRight}
+                footerLeft={tipFooterLeft}
+                footerRight={tipFooterRight}
+                labelStyle={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}
+                selectStyle={btnStyle()}
+              />
+            </div>
+            {/* Background opacity */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.bgAlpha')}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={bgAlpha}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  setBgAlpha(v);
+                  localStorage.setItem('reader_bg_alpha', String(v));
+                }}
+                aria-label={t('reader.bgAlpha')}
+                style={{ flex: 1, minWidth: 80 }}
+              />
+              <span style={{ fontSize: 12, color: '#888', minWidth: 36, textAlign: 'right' }}>
+                {bgAlpha}%
+              </span>
+            </div>
             {/* Text align */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.textAlign')}</span>
+              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                {t('reader.textAlign')}
+              </span>
               {[
                 { key: 'left', label: t('reader.alignLeft') },
                 { key: 'justify', label: t('reader.alignJustify') },
@@ -1210,7 +1723,9 @@ export default function Reader() {
             {/* Content width (desktop only) */}
             {!isMobileUi && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>{t('reader.contentWidth')}</span>
+                <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                  {t('reader.contentWidth')}
+                </span>
                 <input
                   type="range"
                   min={480}
@@ -1224,9 +1739,41 @@ export default function Reader() {
                   }}
                   style={{ verticalAlign: 'middle', width: 80 }}
                 />
-                <span style={{ fontSize: 13, fontWeight: 600, minWidth: 40 }}>{contentWidth}px</span>
+                <span style={{ fontSize: 13, fontWeight: 600, minWidth: 40 }}>
+                  {contentWidth}px
+                </span>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Desktop catalog popover — opened by the top-bar "Chapters" button.
+            Anchored under the top bar; closes on chapter pick or on
+            toggling the top-bar "Chapters" button again. Mobile uses the
+            bottom-sheet catalog panel instead. */}
+        {!isMobileUi && readerPanel === 'catalog' && headerVisible && (
+          <div
+            style={{
+              borderBottom: `1px solid ${tStyle.border}`,
+              background: tStyle.bg,
+              padding: '12px 20px 16px',
+              boxShadow: `0 4px 16px ${theme === 'night' ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.08)'}`,
+              maxHeight: '60vh',
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+            }}
+          >
+            <span style={mobilePanelTitleStyle}>{t('reader.readerPanelCatalog')}</span>
+            <CatalogPanel
+              chapters={chapters}
+              currentIndex={idx}
+              onPick={(newIdx) => {
+                setReaderPanel(null);
+                goToChapter(newIdx);
+              }}
+            />
           </div>
         )}
       </div>
@@ -1307,6 +1854,58 @@ export default function Reader() {
         </>
       )}
 
+      {/* Qidian-style breadcrumb: 书架 > 书名 > 章节 */}
+      {!loading && book && (
+        <div
+          style={{
+            maxWidth: isMobileUi ? '100%' : contentWidth,
+            width: '100%',
+            margin: '0 auto',
+            padding: isMobileUi
+              ? '8px calc(20px + var(--legado-safe-right)) 0 calc(20px + var(--legado-safe-left))'
+              : '14px 24px 0',
+            boxSizing: 'border-box',
+            fontSize: 13,
+            color: tStyle.text,
+            opacity: 0.55,
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <span
+            style={{ cursor: 'pointer' }}
+            onClick={() => navigate('/bookshelf')}
+            role="link"
+            tabIndex={0}
+          >
+            {t('layout.bookshelf')}
+          </span>
+          <span style={{ opacity: 0.5 }}>›</span>
+          <span
+            style={{ cursor: 'pointer' }}
+            onClick={() =>
+              navigate(`/book/${encodeURIComponent(decodedUrl)}`, {
+                state: { parent: readerParentPath.current },
+              })
+            }
+            role="link"
+            tabIndex={0}
+          >
+            {book.name}
+          </span>
+          {currentChapter?.title && (
+            <>
+              <span style={{ opacity: 0.5 }}>›</span>
+              <span style={{ color: tStyle.text, opacity: 0.8 }}>
+                {currentChapter.title}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Content */}
       <div
         ref={contentRef}
@@ -1344,6 +1943,29 @@ export default function Reader() {
               : fontFamily === 'sans'
                 ? '"Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif'
                 : 'inherit',
+          // Chapter transition — out animation during fade-out, in during
+          // fade-in. `idle` returns to normal rendering.
+          opacity: transitionPhase === 'fading-out' ? 0 : 1,
+          transform:
+            transitionPhase === 'fading-out'
+              ? pageAnim === 'cover'
+                ? 'perspective(1200px) rotateY(-30deg)'
+                : pageAnim === 'slide'
+                  ? 'translateX(-30%)'
+                  : pageAnim === 'simulation'
+                    ? 'perspective(1500px) rotateY(-15deg) translateX(-15%)'
+                    : 'none'
+              : transitionPhase === 'fading-in'
+                ? pageAnim === 'cover'
+                  ? 'perspective(1200px) rotateY(-15deg)'
+                  : pageAnim === 'slide'
+                    ? 'translateX(15%)'
+                    : pageAnim === 'simulation'
+                      ? 'perspective(1500px) rotateY(8deg) translateX(8%)'
+                      : 'none'
+                : 'none',
+          transformOrigin: 'left center',
+          transition: transitionPhase === 'idle' ? 'transform 0s, opacity 0s' : 'transform 200ms ease, opacity 200ms ease',
         }}
       >
         {loading ? (
@@ -1392,10 +2014,226 @@ export default function Reader() {
           </div>
         ) : (
           <div
-            dangerouslySetInnerHTML={{
-              __html: sanitizeHtml(applyReplaceRules(content)).replace(/\n/g, '<br/>'),
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '24px',
             }}
-          />
+          >
+            {/* Qidian-style: chapter title as a big H1, then metadata row */}
+            {currentChapter?.title && (
+              <h1
+                style={{
+                  fontSize: '1.6em',
+                  fontWeight: 600,
+                  color: tStyle.text,
+                  margin: 0,
+                  lineHeight: 1.35,
+                  letterSpacing: '0.02em',
+                }}
+              >
+                {currentChapter.title}
+              </h1>
+            )}
+            {book && (
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  gap: '14px',
+                  fontSize: 13,
+                  color: tStyle.text,
+                  opacity: 0.65,
+                }}
+              >
+                <span>
+                  <span style={{ opacity: 0.5 }}>📖 </span>
+                  {book.name}
+                </span>
+                <span>
+                  <span style={{ opacity: 0.5 }}>✍ </span>
+                  {book.author}
+                </span>
+                {content && (
+                  <span>
+                    <span style={{ opacity: 0.5 }}>字数 </span>
+                    {content.length}
+                  </span>
+                )}
+              </div>
+            )}
+            {/* A thin divider line, like Qidian's border-t */}
+            <div
+              style={{
+                height: 1,
+                background: tStyle.border,
+                margin: '0 0 8px',
+              }}
+            />
+            {/* The actual chapter body, Qidian-style: each blank-line
+                delimited block becomes a <p> with text-indent: 2em
+                (matching the Chinese first-line indent the source uses). */}
+            {(() => {
+              const safe = sanitizeHtml(applyReplaceRules(content));
+              // Split on blank lines (\n\n or more).
+              const blocks = safe.split(/\n{2,}/);
+              return (
+                <div
+                  style={{
+                    textAlign: 'justify',
+                    textIndent: '2em',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {blocks.map((block, i) => (
+                    <p
+                      key={i}
+                      style={{
+                        margin: '0 0 1em 0',
+                        textIndent: '2em',
+                        lineHeight: 'inherit',
+                      }}
+                    >
+                      {block.split('\n').map((line, j, arr) => (
+                        <span key={j}>
+                          {line}
+                          {j < arr.length - 1 && <br />}
+                        </span>
+                      ))}
+                    </p>
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* Qidian-style "本章完" + author note + chapter-end nav */}
+            {(() => {
+              // Look for "本章完" / "（本章完）" at the end of the
+              // content. Authors often append it. Detect so we can
+              // surface it as a separate "chapter finished" marker.
+              const trimmed = content.trimEnd();
+              const isComplete =
+                /[（(]?本章完[)）]?\s*$/.test(trimmed);
+              // Pull a trailing author note (lines that look like
+              // "求月票", "求推荐", "求收藏" etc. — the standard
+              // Qidian "作者说" prompts).
+              const noteMatch = content.match(
+                /[（(]?\s*(求[月度推票藏订赏].{0,30}?)[)）]?\s*$/m,
+              );
+              if (!isComplete && !noteMatch) return null;
+              return (
+                <div
+                  style={{
+                    marginTop: 16,
+                    padding: '14px 18px',
+                    background:
+                      theme === 'night'
+                        ? 'rgba(255,255,255,0.04)'
+                        : 'rgba(0,0,0,0.03)',
+                    borderRadius: 8,
+                    border: `1px dashed ${tStyle.border}`,
+                    fontSize: 13,
+                    color: tStyle.text,
+                    opacity: 0.7,
+                  }}
+                >
+                  {isComplete && (
+                    <div
+                      style={{
+                        fontWeight: 600,
+                        marginBottom: noteMatch ? 6 : 0,
+                        letterSpacing: '0.1em',
+                      }}
+                    >
+                      ✦ 本章完 ✦
+                    </div>
+                  )}
+                  {noteMatch && (
+                    <div style={{ lineHeight: 1.6 }}>{noteMatch[1]}</div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Qidian-style: prev / next chapter buttons */}
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: 12,
+                marginTop: 20,
+                paddingBottom: 24,
+              }}
+            >
+              <button
+                onClick={turnPrevious}
+                disabled={!prevChapter}
+                style={{
+                  ...btnStyle(),
+                  padding: '10px 12px',
+                  fontSize: 13,
+                  textAlign: 'left',
+                  opacity: prevChapter ? 1 : 0.4,
+                  cursor: prevChapter ? 'pointer' : 'not-allowed',
+                  overflow: 'hidden',
+                }}
+                title={prevChapter?.title}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    opacity: 0.55,
+                    marginBottom: 2,
+                  }}
+                >
+                  ‹ 上一章
+                </div>
+                <div
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {prevChapter?.title || t('reader.firstChapter')}
+                </div>
+              </button>
+              <button
+                onClick={turnNext}
+                disabled={!nextChapter}
+                style={{
+                  ...btnStyle(),
+                  padding: '10px 12px',
+                  fontSize: 13,
+                  textAlign: 'right',
+                  opacity: nextChapter ? 1 : 0.4,
+                  cursor: nextChapter ? 'pointer' : 'not-allowed',
+                  overflow: 'hidden',
+                }}
+                title={nextChapter?.title}
+              >
+                <div
+                  style={{
+                    fontSize: 11,
+                    opacity: 0.55,
+                    marginBottom: 2,
+                  }}
+                >
+                  下一章 ›
+                </div>
+                <div
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {nextChapter?.title || t('reader.lastChapter')}
+                </div>
+              </button>
+            </div>
+          </div>
         )}
       </div>
 
@@ -1420,7 +2258,8 @@ export default function Reader() {
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
-              padding: '0 calc(18px + var(--legado-safe-right)) 10px calc(18px + var(--legado-safe-left))',
+              padding:
+                '0 calc(18px + var(--legado-safe-right)) 10px calc(18px + var(--legado-safe-left))',
             }}
           >
             <button
@@ -1453,7 +2292,9 @@ export default function Reader() {
                 updateStoredBool('reader_use_replace_rules', setUseReplaceRules, next);
               }}
               style={mobileRoundButtonStyle(useReplaceRules)}
-              aria-label={useReplaceRules ? t('reader.replaceRulesOn') : t('reader.replaceRulesOff')}
+              aria-label={
+                useReplaceRules ? t('reader.replaceRulesOn') : t('reader.replaceRulesOff')
+              }
               title={useReplaceRules ? t('reader.replaceRulesOn') : t('reader.replaceRulesOff')}
             >
               ≋
@@ -1461,15 +2302,16 @@ export default function Reader() {
             <button
               type="button"
               onClick={() => {
-                const nextTheme = theme === 'dark' ? 'light' : 'dark';
-                setTheme(nextTheme);
-                localStorage.setItem('reader_theme', nextTheme);
+                const idx = THEME_CYCLE.indexOf(theme);
+                const next = THEME_CYCLE[(idx + 1) % THEME_CYCLE.length];
+                setTheme(next);
+                localStorage.setItem('reader_theme', next);
               }}
-              style={mobileRoundButtonStyle(theme === 'dark')}
-              aria-label={theme === 'dark' ? t('reader.dayTheme') : t('reader.nightTheme')}
-              title={theme === 'dark' ? t('reader.dayTheme') : t('reader.nightTheme')}
+              style={mobileRoundButtonStyle(theme === 'night')}
+              aria-label={t(`reader.themeCycle.${theme}`)}
+              title={t(`reader.themeCycle.${theme}`)}
             >
-              {theme === 'dark' ? '日' : '夜'}
+              {theme === 'day' ? '☀' : theme === 'night' ? '☾' : '✦'}
             </button>
           </div>
 
@@ -1479,9 +2321,10 @@ export default function Reader() {
               background: tStyle.bg,
               borderTop: `1px solid ${tStyle.border}`,
               borderRadius: '16px 16px 0 0',
-              boxShadow: theme === 'dark'
-                ? '0 -8px 32px rgba(0,0,0,0.45), 0 -1px 0 rgba(255,255,255,0.04)'
-                : '0 -8px 32px rgba(0,0,0,0.10), 0 -1px 0 rgba(0,0,0,0.04)',
+              boxShadow:
+                theme === 'night'
+                  ? '0 -8px 32px rgba(0,0,0,0.45), 0 -1px 0 rgba(255,255,255,0.04)'
+                  : '0 -8px 32px rgba(0,0,0,0.10), 0 -1px 0 rgba(0,0,0,0.04)',
               padding: readerPanel
                 ? '12px calc(16px + var(--legado-safe-right)) calc(10px + var(--legado-safe-bottom)) calc(16px + var(--legado-safe-left))'
                 : '8px calc(14px + var(--legado-safe-right)) calc(6px + var(--legado-safe-bottom)) calc(14px + var(--legado-safe-left))',
@@ -1497,7 +2340,9 @@ export default function Reader() {
                 }}
               >
                 <span style={mobilePanelTitleStyle}>{t('reader.readerPanelSearch')}</span>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8 }}>
+                <div
+                  style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8 }}
+                >
                   <input
                     value={readerSearchQuery}
                     onChange={(e) => setReaderSearchQuery(e.target.value)}
@@ -1522,11 +2367,36 @@ export default function Reader() {
                 </div>
                 {readerSearchQuery.trim() && (
                   <div style={{ display: 'grid', gap: 6, maxHeight: '24dvh', overflowY: 'auto' }}>
-                    <span style={{ fontSize: 12, opacity: 0.72 }}>
-                      {readerSearchResults.length
-                        ? t('reader.searchMatches', { count: readerSearchResults.length })
-                        : t('reader.noSearchMatches')}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, opacity: 0.78 }}>
+                      <span>
+                        {totalSearchMatches > 0
+                          ? t('reader.searchMatches', { count: totalSearchMatches })
+                          : t('reader.noSearchMatches')}
+                      </span>
+                      {totalSearchMatches > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => goToMatch(activeMatchIndex - 1)}
+                            aria-label={t('reader.searchPrev')}
+                            style={{ ...btnStyle(), padding: '2px 8px', fontSize: 12 }}
+                          >
+                            ‹
+                          </button>
+                          <span style={{ minWidth: 36, textAlign: 'center' }}>
+                            {activeMatchIndex + 1} / {totalSearchMatches}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => goToMatch(activeMatchIndex + 1)}
+                            aria-label={t('reader.searchNext')}
+                            style={{ ...btnStyle(), padding: '2px 8px', fontSize: 12 }}
+                          >
+                            ›
+                          </button>
+                        </>
+                      )}
+                    </div>
                     {readerSearchResults.map((result) => (
                       <button
                         key={result.key}
@@ -1548,6 +2418,26 @@ export default function Reader() {
               </div>
             )}
 
+            {readerPanel === 'catalog' && (
+              <div
+                style={{
+                  display: 'grid',
+                  gap: 8,
+                  marginBottom: 12,
+                }}
+              >
+                <span style={mobilePanelTitleStyle}>{t('reader.readerPanelCatalog')}</span>
+                <CatalogPanel
+                  chapters={chapters}
+                  currentIndex={idx}
+                  onPick={(newIdx) => {
+                    setReaderPanel(null);
+                    goToChapter(newIdx);
+                  }}
+                />
+              </div>
+            )}
+
             {readerPanel === 'style' && (
               <div
                 style={{
@@ -1560,13 +2450,14 @@ export default function Reader() {
                   {[
                     { key: 'cover', label: t('reader.pageAnimCover') },
                     { key: 'slide', label: t('reader.pageAnimSlide') },
+                    { key: 'simulation', label: t('reader.pageAnimSimulation') },
                     { key: 'scroll', label: t('reader.pageAnimScroll') },
                     { key: 'none', label: t('reader.pageAnimNone') },
                   ].map((item) => (
                     <button
                       key={item.key}
                       type="button"
-                      onClick={() => updatePageAnim(item.key)}
+                      onClick={() => updatePageAnim(item.key as PageAnim)}
                       style={pageAnim === item.key ? btnStyle(true) : btnStyle()}
                     >
                       {item.label}
@@ -1575,7 +2466,14 @@ export default function Reader() {
                 </div>
                 <div style={mobileSettingBlockStyle}>
                   <span style={{ fontSize: 12, opacity: 0.75 }}>{t('reader.fontSize')}</span>
-                  <div style={{ display: 'grid', gridTemplateColumns: '44px 1fr 44px', gap: 8, alignItems: 'center' }}>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '44px 1fr 44px',
+                      gap: 8,
+                      alignItems: 'center',
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={() => {
@@ -1629,7 +2527,9 @@ export default function Reader() {
                     />
                   </div>
                   <div style={mobileSettingBlockStyle}>
-                    <span style={{ fontSize: 12, opacity: 0.75 }}>{t('reader.paragraphSpacing')}</span>
+                    <span style={{ fontSize: 12, opacity: 0.75 }}>
+                      {t('reader.paragraphSpacing')}
+                    </span>
                     <input
                       type="range"
                       min={0}
@@ -1643,9 +2543,31 @@ export default function Reader() {
                       }}
                     />
                   </div>
+                  {/* Background opacity (mobile style panel) */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <span style={{ fontSize: 12, opacity: 0.75 }}>
+                      {t('reader.bgAlpha')}
+                    </span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      step={5}
+                      value={bgAlpha}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        setBgAlpha(v);
+                        localStorage.setItem('reader_bg_alpha', String(v));
+                      }}
+                      style={{ flex: 1, minWidth: 80 }}
+                    />
+                    <span style={{ fontSize: 12, opacity: 0.6, minWidth: 36, textAlign: 'right' }}>
+                      {bgAlpha}%
+                    </span>
+                  </div>
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                  {['light', 'dark', 'sepia'].map((tName) => (
+                  {THEME_CYCLE.map((tName) => (
                     <button
                       key={tName}
                       type="button"
@@ -1655,7 +2577,7 @@ export default function Reader() {
                       }}
                       style={theme === tName ? btnStyle(true) : btnStyle()}
                     >
-                      {t(`reader.theme${tName.charAt(0).toUpperCase() + tName.slice(1)}`)}
+                      {t(`reader.themeCycle.${tName}`)}
                     </button>
                   ))}
                   {[
@@ -1710,7 +2632,13 @@ export default function Reader() {
                   <span>{t('reader.keepScreenAwake')}</span>
                   <button
                     type="button"
-                    onClick={() => updateStoredBool('reader_keep_screen_awake', setKeepScreenAwake, !keepScreenAwake)}
+                    onClick={() =>
+                      updateStoredBool(
+                        'reader_keep_screen_awake',
+                        setKeepScreenAwake,
+                        !keepScreenAwake
+                      )
+                    }
                     style={keepScreenAwake ? btnStyle(true) : btnStyle()}
                   >
                     {keepScreenAwake ? t('common.enabled') : t('common.disabled')}
@@ -1720,7 +2648,13 @@ export default function Reader() {
                   <span>{t('reader.showReadProgress')}</span>
                   <button
                     type="button"
-                    onClick={() => updateStoredBool('reader_show_progress', setShowReadProgress, !showReadProgress)}
+                    onClick={() =>
+                      updateStoredBool(
+                        'reader_show_progress',
+                        setShowReadProgress,
+                        !showReadProgress
+                      )
+                    }
                     style={showReadProgress ? btnStyle(true) : btnStyle()}
                   >
                     {showReadProgress ? t('common.enabled') : t('common.disabled')}
@@ -1730,7 +2664,9 @@ export default function Reader() {
                   <span>{t('reader.textSelectable')}</span>
                   <button
                     type="button"
-                    onClick={() => updateStoredBool('reader_text_selectable', setTextSelectable, !textSelectable)}
+                    onClick={() =>
+                      updateStoredBool('reader_text_selectable', setTextSelectable, !textSelectable)
+                    }
                     style={textSelectable ? btnStyle(true) : btnStyle()}
                   >
                     {textSelectable ? t('common.enabled') : t('common.disabled')}
@@ -1740,7 +2676,13 @@ export default function Reader() {
                   <span>{t('reader.useReplaceRules')}</span>
                   <button
                     type="button"
-                    onClick={() => updateStoredBool('reader_use_replace_rules', setUseReplaceRules, !useReplaceRules)}
+                    onClick={() =>
+                      updateStoredBool(
+                        'reader_use_replace_rules',
+                        setUseReplaceRules,
+                        !useReplaceRules
+                      )
+                    }
                     style={useReplaceRules ? btnStyle(true) : btnStyle()}
                   >
                     {useReplaceRules ? t('common.enabled') : t('common.disabled')}
@@ -1769,7 +2711,8 @@ export default function Reader() {
                 </div>
                 <div style={mobileSettingBlockStyle}>
                   <span style={mobilePanelTitleStyle}>
-                    {t('reader.autoPageInterval')} · {t('reader.secondsValue', { value: (autoPageInterval / 1000).toFixed(1) })}
+                    {t('reader.autoPageInterval')} ·{' '}
+                    {t('reader.secondsValue', { value: (autoPageInterval / 1000).toFixed(1) })}
                   </span>
                   <input
                     type="range"
@@ -1785,7 +2728,9 @@ export default function Reader() {
                   />
                 </div>
                 <div style={mobileSettingBlockStyle}>
-                  <span style={mobilePanelTitleStyle}>{t('reader.ttsSpeed')} {ttsRate.toFixed(1)}x</span>
+                  <span style={mobilePanelTitleStyle}>
+                    {t('reader.ttsSpeed')} {ttsRate.toFixed(1)}x
+                  </span>
                   <input
                     type="range"
                     min={0.5}
@@ -1812,67 +2757,14 @@ export default function Reader() {
                 padding: '4px 4px 10px',
               }}
             >
-              <button
-                type="button"
-                onClick={() => prevChapter && goToChapter(prevChapter.index)}
-                disabled={!prevChapter}
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: '50%',
-                  border: 'none',
-                  background: 'transparent',
-                  color: prevChapter ? tStyle.text : '#888',
-                  cursor: prevChapter ? 'pointer' : 'not-allowed',
-                  fontSize: 20,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: prevChapter ? 0.75 : 0.3,
-                  transition: 'all 0.2s',
-                }}
-              >
-                ‹
-              </button>
-              <div style={{ position: 'relative', height: 28, display: 'flex', alignItems: 'center' }}>
-                <div style={{ position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, background: tStyle.border, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${chapterProgressPercent}%`, background: '#1976d2', borderRadius: 2, transition: 'width 0.2s' }} />
-                </div>
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(0, chapters.length - 1)}
-                  step={1}
-                  value={Math.min(idx, Math.max(0, chapters.length - 1))}
-                  disabled={chapters.length <= 1}
-                  onChange={(e) => goToChapter(parseInt(e.target.value, 10))}
-                  aria-label={t('reader.chapterProgress', { current: idx + 1, total: chapters.length })}
-                  style={{ position: 'absolute', left: 0, right: 0, width: '100%', height: '100%', opacity: 0, cursor: chapters.length > 1 ? 'pointer' : 'default', margin: 0 }}
-                />
-                <div style={{ position: 'absolute', width: 10, height: 10, borderRadius: '50%', background: '#1976d2', border: `2px solid ${tStyle.bg}`, pointerEvents: 'none', left: `calc(${chapterProgressPercent}% - 5px)`, transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-              </div>
-              <button
-                type="button"
-                onClick={() => nextChapter && goToChapter(nextChapter.index)}
-                disabled={!nextChapter}
-                style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: '50%',
-                  border: 'none',
-                  background: 'transparent',
-                  color: nextChapter ? tStyle.text : '#888',
-                  cursor: nextChapter ? 'pointer' : 'not-allowed',
-                  fontSize: 20,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  opacity: nextChapter ? 0.75 : 0.3,
-                  transition: 'all 0.2s',
-                }}
-              >
-                ›
-              </button>
+              <ChapterSlider
+                idx={idx}
+                total={chapters.length}
+                onChange={goToChapter}
+                variant="mobile"
+                trackBg={tStyle.border}
+                thumbBorder={tStyle.bg}
+              />
             </div>
 
             <div
@@ -1885,8 +2777,8 @@ export default function Reader() {
             >
               <button
                 type="button"
-                onClick={() => navigate(`/book/${encodeURIComponent(decodedUrl)}`)}
-                style={mobileMenuButtonStyle()}
+                onClick={() => openReaderPanel('catalog')}
+                style={mobileMenuButtonStyle(readerPanel === 'catalog')}
               >
                 <span style={{ fontSize: 18 }}>☰</span>
                 <span>{t('reader.catalog')}</span>
@@ -1940,89 +2832,63 @@ export default function Reader() {
             boxSizing: 'border-box',
           }}
         >
-          {/* Prev chapter — circular icon button */}
-          <button
-            onClick={() => prevChapter && goToChapter(prevChapter.index)}
-            disabled={!prevChapter}
-            title={t('reader.prevChapter')}
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: '50%',
-              border: 'none',
-              background: 'transparent',
-              color: prevChapter ? tStyle.text : '#888',
-              cursor: prevChapter ? 'pointer' : 'not-allowed',
-              fontSize: 18,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              opacity: prevChapter ? 0.8 : 0.35,
-              transition: 'all 0.2s',
-            }}
-            onMouseEnter={(e) => { if (prevChapter) { e.currentTarget.style.background = tStyle.border; e.currentTarget.style.opacity = '1'; }}}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.opacity = prevChapter ? '0.8' : '0.35'; }}
-          >
-            ‹
-          </button>
+          {/* Prev chapter + slider + next chapter — extracted to <ChapterSlider> */}
+          <ChapterSlider
+            idx={idx}
+            total={chapters.length}
+            onChange={goToChapter}
+            variant="desktop"
+            trackBg={tStyle.border}
+            thumbBorder={tStyle.bg}
+          />
+          <TipValue
+            kind={tipFooterLeft}
+            chapterTitle={currentChapter?.title}
+            bookName={book?.name}
+            scrollPct={tipScrollPct}
+            chapterProgressPct={chapterProgressPercent}
+            color="#888"
+          />
 
-          {/* Progress slider */}
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-            <span style={{ fontSize: 11, color: '#888', fontWeight: 500, whiteSpace: 'nowrap', width: 36, textAlign: 'right' }}>
-              {Math.round(chapterProgressPercent)}%
-            </span>
-            <div style={{ flex: 1, position: 'relative', height: 28, display: 'flex', alignItems: 'center' }}>
-              {/* Track background */}
-              <div style={{ position: 'absolute', left: 0, right: 0, height: 3, borderRadius: 2, background: tStyle.border, overflow: 'hidden' }}>
-                <div style={{ height: '100%', width: `${chapterProgressPercent}%`, background: '#1976d2', borderRadius: 2, transition: 'width 0.2s' }} />
-              </div>
-              {/* Thumb indicator */}
-              <div style={{ position: 'absolute', width: 10, height: 10, borderRadius: '50%', background: '#1976d2', border: `2px solid ${tStyle.bg}`, pointerEvents: 'none', left: `calc(${chapterProgressPercent}% - 5px)`, transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)' }} />
-              {/* Invisible range input for interaction */}
-              <input
-                type="range"
-                min={0}
-                max={Math.max(0, chapters.length - 1)}
-                step={1}
-                value={Math.min(idx, Math.max(0, chapters.length - 1))}
-                disabled={chapters.length <= 1}
-                onChange={(e) => goToChapter(parseInt(e.target.value, 10))}
-                aria-label={t('reader.chapterProgress', { current: idx + 1, total: chapters.length })}
-                style={{ position: 'absolute', left: 0, right: 0, width: '100%', height: '100%', opacity: 0, cursor: chapters.length > 1 ? 'pointer' : 'default', margin: 0 }}
-              />
-            </div>
-            <span style={{ fontSize: 11, color: '#888', fontWeight: 500, whiteSpace: 'nowrap', width: 50 }}>
-              {idx + 1} / {chapters.length}
-            </span>
-          </div>
-
-          {/* Next chapter — circular icon button */}
-          <button
-            onClick={() => nextChapter && goToChapter(nextChapter.index)}
-            disabled={!nextChapter}
-            title={t('reader.nextChapter')}
+          {/* Footer-right tip — when the user picks `bookName` (default)
+              or any other kind, the slot value renders here. We keep
+              the static `idx+1 / chapters.length` text as a fallback
+              when the slot is set to `none` so the user never loses
+              basic chapter context. */}
+          <span
             style={{
-              width: 32,
-              height: 32,
-              borderRadius: '50%',
-              border: 'none',
-              background: 'transparent',
-              color: nextChapter ? tStyle.text : '#888',
-              cursor: nextChapter ? 'pointer' : 'not-allowed',
-              fontSize: 18,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              opacity: nextChapter ? 0.8 : 0.35,
-              transition: 'all 0.2s',
+              fontSize: 11,
+              color: '#888',
+              fontWeight: 500,
+              whiteSpace: 'nowrap',
+              width: 50,
+              textAlign: 'right',
             }}
-            onMouseEnter={(e) => { if (nextChapter) { e.currentTarget.style.background = tStyle.border; e.currentTarget.style.opacity = '1'; }}}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.opacity = nextChapter ? '0.8' : '0.35'; }}
           >
-            ›
-          </button>
+            {tipFooterRight === 0
+              ? `${idx + 1} / ${chapters.length}`
+              : null}
+          </span>
+          <TipValue
+            kind={tipFooterRight}
+            chapterTitle={currentChapter?.title}
+            bookName={book?.name}
+            scrollPct={tipScrollPct}
+            chapterProgressPct={chapterProgressPercent}
+            color="#888"
+          />
+          <span
+            style={{
+              fontSize: 11,
+              color: '#888',
+              fontWeight: 500,
+              whiteSpace: 'nowrap',
+              width: 36,
+              textAlign: 'right',
+            }}
+          >
+            {Math.round(chapterProgressPercent)}%
+          </span>
         </div>
       )}
     </div>
