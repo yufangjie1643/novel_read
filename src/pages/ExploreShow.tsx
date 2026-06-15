@@ -28,6 +28,7 @@ export default function ExploreShow() {
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [message, setMessage] = useState('');
+  const [loadedSource, setLoadedSource] = useState<BookSource | null>(state.source ?? null);
   const pageRef = useRef(1);
   const mountedRef = useRef(false);
   const requestIdRef = useRef(0);
@@ -42,7 +43,7 @@ export default function ExploreShow() {
 
   const fetchBooks = useCallback(
     async (page: number, isLoadMore: boolean) => {
-      if (!state.source || !state.exploreUrl) return;
+      if (!loadedSource || !state.exploreUrl) return;
       const requestId = ++requestIdRef.current;
 
       if (!isLoadMore) {
@@ -52,7 +53,7 @@ export default function ExploreShow() {
 
       try {
         const resp = await invoke<ApiResponse<SearchBook[]>>('explore_books', {
-          source: state.source,
+          source: loadedSource,
           url: state.exploreUrl,
           page,
         });
@@ -94,7 +95,7 @@ export default function ExploreShow() {
         }
       }
     },
-    [state.source, state.exploreUrl, t]
+    [loadedSource, state.exploreUrl, t]
   );
 
   useEffect(() => {
@@ -108,7 +109,7 @@ export default function ExploreShow() {
       invoke<ApiResponse<BookSource | null>>('get_book_source', { url: state.sourceUrl })
         .then((resp) => {
           if (resp.success && resp.data && mountedRef.current) {
-            state.source = resp.data;
+            setLoadedSource(resp.data);
             pageRef.current = 1;
             setBooks([]);
             setHasMore(true);
@@ -141,7 +142,7 @@ export default function ExploreShow() {
     navigate(`/book/${encodeURIComponent(book.book_url)}`, {
       state: {
         preview: true,
-        source: state.source,
+        source: loadedSource,
         searchBook: book,
         parent: location.pathname + (location.search || ''),
       },

@@ -49,6 +49,17 @@ export interface ExploreKind {
   url?: string;
 }
 
+export interface BookSourceSummary {
+  bookSourceUrl: string;
+  bookSourceName: string;
+  bookSourceGroup?: string;
+  bookSourceType: number;
+  enabled: boolean;
+  enabledExplore: boolean;
+  weight: number;
+  customOrder: number;
+}
+
 export interface BookSourceGroup {
   sourceUrl: string;
   sourceName: string;

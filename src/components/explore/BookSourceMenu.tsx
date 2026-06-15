@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-export type BookSourceAction = 'edit' | 'top' | 'login' | 'searchThis' | 'refresh' | 'delete';
+export type BookSourceAction = 'edit' | 'top' | 'login' | 'refresh' | 'delete';
 
 export function BookSourceMenu({
   anchorEl,
@@ -52,7 +52,6 @@ export function BookSourceMenu({
     { key: 'edit', label: t('explore.menu.edit'), show: true },
     { key: 'top', label: t('explore.menu.top'), show: true },
     { key: 'login', label: t('explore.menu.login'), show: true },
-    { key: 'searchThis', label: t('explore.menu.searchThis'), show: true },
     { key: 'refresh', label: t('explore.menu.refresh'), show: true },
     { key: 'delete', label: t('explore.menu.delete'), show: true },
   ];

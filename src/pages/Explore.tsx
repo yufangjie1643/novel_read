@@ -7,6 +7,7 @@ import type {
   ApiResponse,
   BookSource,
   BookSourceGroup as Group,
+  BookSourceSummary,
   ExploreItem,
   ExploreItemsPage,
   ExploreKind,
@@ -45,21 +46,28 @@ export default function Explore() {
       setSourcesLoading(true);
       setError(null);
       try {
-        const resp = await invoke<ApiResponse<ExploreItemsPage>>('get_explore_items', {
-          offset: 0,
-          limit: PAGE_LIMIT,
-          filter: null,
-        });
+        const [itemsResp, summariesResp] = await Promise.all([
+          invoke<ApiResponse<ExploreItemsPage>>('get_explore_items', {
+            offset: 0,
+            limit: PAGE_LIMIT,
+            filter: null,
+          }),
+          invoke<ApiResponse<BookSourceSummary[]>>('get_book_source_summaries'),
+        ]);
         if (cancelled) return;
-        if (resp.success && resp.data) {
-          const grouped = groupItems(resp.data.items);
+        if (itemsResp.success && itemsResp.data) {
+          const summaryMap = new Map<string, BookSourceSummary>();
+          if (summariesResp.success && summariesResp.data) {
+            for (const s of summariesResp.data) summaryMap.set(s.bookSourceUrl, s);
+          }
+          const grouped = groupItems(itemsResp.data.items, summaryMap);
           setGroups(grouped);
           // Auto-expand the first group
           if (grouped.length > 0) {
             setExpanded({ [grouped[0].sourceUrl]: true });
           }
         } else {
-          setError(resp.error || t('explore.error.load'));
+          setError(itemsResp.error || t('explore.error.load'));
         }
       } catch (e) {
         if (!cancelled) setError(t('common.error', { message: String(e) }));
@@ -154,9 +162,6 @@ export default function Explore() {
       case 'login':
         void openLogin(group.sourceUrl);
         return;
-      case 'searchThis':
-        navigate('/', { state: { sourceScope: group.sourceUrl } });
-        return;
       case 'refresh':
         setKindsBySource((prev) => {
           const next = { ...prev };
@@ -184,13 +189,20 @@ export default function Explore() {
 
   async function reloadGroups() {
     try {
-      const resp = await invoke<ApiResponse<ExploreItemsPage>>('get_explore_items', {
-        offset: 0,
-        limit: PAGE_LIMIT,
-        filter: null,
-      });
-      if (resp.success && resp.data) {
-        setGroups(groupItems(resp.data.items));
+      const [itemsResp, summariesResp] = await Promise.all([
+        invoke<ApiResponse<ExploreItemsPage>>('get_explore_items', {
+          offset: 0,
+          limit: PAGE_LIMIT,
+          filter: null,
+        }),
+        invoke<ApiResponse<BookSourceSummary[]>>('get_book_source_summaries'),
+      ]);
+      if (itemsResp.success && itemsResp.data) {
+        const summaryMap = new Map<string, BookSourceSummary>();
+        if (summariesResp.success && summariesResp.data) {
+          for (const s of summariesResp.data) summaryMap.set(s.bookSourceUrl, s);
+        }
+        setGroups(groupItems(itemsResp.data.items, summaryMap));
       }
     } catch (e) {
       console.error('reloadGroups failed:', e);
@@ -435,17 +447,18 @@ export default function Explore() {
   );
 }
 
-function groupItems(items: ExploreItem[]): Group[] {
+function groupItems(items: ExploreItem[], summaries: Map<string, BookSourceSummary>): Group[] {
   const map = new Map<string, Group>();
   for (const item of items) {
     if (!map.has(item.source_url)) {
+      const summary = summaries.get(item.source_url);
       map.set(item.source_url, {
         sourceUrl: item.source_url,
         sourceName: item.source_name,
-        sourceGroup: null,
+        sourceGroup: summary?.bookSourceGroup ?? null,
         hasLoginUrl: false,
-        weight: 0,
-        customOrder: 0,
+        weight: summary?.weight ?? 0,
+        customOrder: summary?.customOrder ?? 0,
       });
     }
   }
