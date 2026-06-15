@@ -227,6 +227,7 @@
     "more": "更多",
     "sourceNameCol": "名称",
     "sourceHealthCol": "健康",
+    "sourceNotTested": "点击「测试全部」测量此书源",
     "sourceSuccessCol": "成功率",
     "sourceLatencyCol": "平均延迟",
     "sourceLastErrorCol": "最近错误",
@@ -249,7 +250,36 @@
     "foundBooks": "找到 {{count}} 本书",
     "failed": "失败：{{error}}",
     "loadBookInfo": "加载书籍信息...",
-    "sourceNotFound": "未找到书源"
+    "sourceNotFound": "未找到书源",
+    "searchPlaceholder": "搜索发现源（输入 group:xxx 过滤分组）",
+    "emptyKinds": "该书源没有发现分类",
+    "kindsFailed": "子分类加载失败",
+    "kindsRetry": "重试",
+    "expand": "展开",
+    "collapse": "收起",
+    "menu": {
+      "edit": "编辑书源",
+      "top": "置顶",
+      "login": "登录",
+      "searchThis": "搜索该书源",
+      "refresh": "刷新分类",
+      "delete": "删除书源",
+      "deleteConfirm": "确定要删除「{{name}}」吗？"
+    },
+    "show": {
+      "titlePrefix": "发现 /",
+      "loadMore": "点击加载更多",
+      "loading": "加载中…",
+      "noMore": "已显示全部",
+      "empty": "未找到书籍"
+    },
+    "error": {
+      "load": "加载发现列表失败",
+      "explore": "加载发现分类失败"
+    },
+    "errorDialog": {
+      "title": "分类错误"
+    }
   },
   "bookDetail": {
     "loading": "加载书籍信息...",

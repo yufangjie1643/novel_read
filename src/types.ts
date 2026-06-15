@@ -49,6 +49,15 @@ export interface ExploreKind {
   url?: string;
 }
 
+export interface BookSourceGroup {
+  sourceUrl: string;
+  sourceName: string;
+  sourceGroup: string | null;
+  hasLoginUrl: boolean;
+  weight: number;
+  customOrder: number;
+}
+
 export interface SearchBook {
   name: string;
   author?: string;
@@ -269,6 +278,7 @@ export type SourceKey = string;
 export type FailureKind = 'Timeout' | 'Http' | 'Parse';
 
 export interface ScoreBreakdown {
+  allQueryPresent: number;
   words: number;
   typo: number;
   proximity: number;
@@ -283,14 +293,49 @@ export type SearchEvent =
   | { event: 'SourceStarted'; sourceUrl: SourceKey; sourceName: string }
   | { event: 'Result'; sourceUrl: SourceKey; book: SearchBook; score: ScoreBreakdown }
   | { event: 'SourceFinished'; sourceUrl: SourceKey; count: number; latencyMs: number }
-  | { event: 'SourceFailed'; sourceUrl: SourceKey; error: string; latencyMs: number; kind: FailureKind }
-  | { event: 'Done'; requestId: string; succeeded: number; failed: number; totalResults: number; durationMs: number };
+  | {
+      event: 'SourceFailed';
+      sourceUrl: SourceKey;
+      error: string;
+      latencyMs: number;
+      kind: FailureKind;
+    }
+  | {
+      event: 'Progress';
+      requestId: string;
+      running: number;
+      ok: number;
+      failed: number;
+      total: number;
+    }
+  | {
+      event: 'Done';
+      requestId: string;
+      succeeded: number;
+      failed: number;
+      totalResults: number;
+      durationMs: number;
+    };
+
+export interface SearchProgress {
+  running: number;
+  ok: number;
+  failed: number;
+  total: number;
+}
 
 export type SourceStatus =
   | { state: 'pending'; sourceUrl: SourceKey; sourceName: string }
   | { state: 'running'; sourceUrl: SourceKey; sourceName: string }
   | { state: 'ok'; sourceUrl: SourceKey; sourceName: string; count: number; latencyMs: number }
-  | { state: 'failed'; sourceUrl: SourceKey; sourceName: string; error: string; latencyMs: number; kind: FailureKind };
+  | {
+      state: 'failed';
+      sourceUrl: SourceKey;
+      sourceName: string;
+      error: string;
+      latencyMs: number;
+      kind: FailureKind;
+    };
 
 export interface SearchFailure {
   sourceUrl: SourceKey;
@@ -302,9 +347,38 @@ export interface SearchFailure {
 export type SearchState =
   | { kind: 'idle' }
   | { kind: 'typing' }
-  | { kind: 'streaming'; query: string; results: SearchBook[]; statuses: Record<SourceKey, SourceStatus>; failures: SearchFailure[]; startedAt: number; requestId: string }
-  | { kind: 'stalled'; query: string; results: SearchBook[]; statuses: Record<SourceKey, SourceStatus>; failures: SearchFailure[]; startedAt: number; requestId: string; stalledSince: number }
-  | { kind: 'done'; query: string; results: SearchBook[]; statuses: Record<SourceKey, SourceStatus>; failures: SearchFailure[]; totalResults: number; durationMs: number; requestId: string }
+  | {
+      kind: 'streaming';
+      query: string;
+      results: SearchBook[];
+      statuses: Record<SourceKey, SourceStatus>;
+      failures: SearchFailure[];
+      progress: SearchProgress;
+      startedAt: number;
+      requestId: string;
+    }
+  | {
+      kind: 'stalled';
+      query: string;
+      results: SearchBook[];
+      statuses: Record<SourceKey, SourceStatus>;
+      failures: SearchFailure[];
+      progress: SearchProgress;
+      startedAt: number;
+      requestId: string;
+      stalledSince: number;
+    }
+  | {
+      kind: 'done';
+      query: string;
+      results: SearchBook[];
+      statuses: Record<SourceKey, SourceStatus>;
+      failures: SearchFailure[];
+      progress: SearchProgress;
+      totalResults: number;
+      durationMs: number;
+      requestId: string;
+    }
   | { kind: 'error'; message: string };
 
 export interface SourceStats {
@@ -321,4 +395,94 @@ export interface SourceStats {
   rollingSuccessCount: number;
   rollingTotalCount: number;
   healthScore: number;
+  // Per-operation health: tells the user *which stage* of a source
+  // pipeline is broken (search, explore, chapter list, chapter
+  // content), not just a single number.
+  searchOk: number;
+  searchErr: number;
+  searchTimeout: number;
+  lastSearchError: string | null;
+  lastSearchAt: number | null;
+  exploreOk: number;
+  exploreErr: number;
+  exploreTimeout: number;
+  lastExploreError: string | null;
+  lastExploreAt: number | null;
+  chapterListOk: number;
+  chapterListErr: number;
+  chapterListTimeout: number;
+  lastChapterListError: string | null;
+  lastChapterListAt: number | null;
+  chapterContentOk: number;
+  chapterContentErr: number;
+  chapterContentTimeout: number;
+  lastChapterContentError: string | null;
+  lastChapterContentAt: number | null;
+}
+
+/// One row of per-operation health, used by the Sources page
+/// to render a small status indicator (✓ / ⚠ / ✗) for each
+/// stage of a book-source pipeline.
+export interface OpHealth {
+  ok: number;
+  err: number;
+  timeout: number;
+  lastError: string | null;
+  lastAt: number | null;
+}
+
+export type SourceOpHealth = {
+  search: OpHealth;
+  explore: OpHealth;
+  chapterList: OpHealth;
+  chapterContent: OpHealth;
+};
+
+export function pickOpHealth(s: SourceStats | null | undefined): SourceOpHealth {
+  const empty: OpHealth = { ok: 0, err: 0, timeout: 0, lastError: null, lastAt: null };
+  if (!s) {
+    return { search: empty, explore: empty, chapterList: empty, chapterContent: empty };
+  }
+  return {
+    search: {
+      ok: s.searchOk,
+      err: s.searchErr,
+      timeout: s.searchTimeout,
+      lastError: s.lastSearchError,
+      lastAt: s.lastSearchAt,
+    },
+    explore: {
+      ok: s.exploreOk,
+      err: s.exploreErr,
+      timeout: s.exploreTimeout,
+      lastError: s.lastExploreError,
+      lastAt: s.lastExploreAt,
+    },
+    chapterList: {
+      ok: s.chapterListOk,
+      err: s.chapterListErr,
+      timeout: s.chapterListTimeout,
+      lastError: s.lastChapterListError,
+      lastAt: s.lastChapterListAt,
+    },
+    chapterContent: {
+      ok: s.chapterContentOk,
+      err: s.chapterContentErr,
+      timeout: s.chapterContentTimeout,
+      lastError: s.lastChapterContentError,
+      lastAt: s.lastChapterContentAt,
+    },
+  };
+}
+
+/// Symbol + color for a per-op health status. A simple "ever
+/// observed a non-zero error count for this op" rule is enough
+/// for the indicator — the user can hover for exact counts.
+export type OpSymbol = 'ok' | 'warn' | 'err' | 'untested';
+
+export function opSymbol(op: OpHealth): OpSymbol {
+  if (op.ok === 0 && op.err === 0 && op.timeout === 0) return 'untested';
+  if (op.err > 0 || op.timeout > 0) return 'err';
+  if (op.ok > 0) return 'ok';
+  return 'untested';
 }

@@ -227,6 +227,7 @@
     "more": "more",
     "sourceNameCol": "Name",
     "sourceHealthCol": "Health",
+    "sourceNotTested": "Click \"Test all\" to measure this source",
     "sourceSuccessCol": "Success rate",
     "sourceLatencyCol": "Avg latency",
     "sourceLastErrorCol": "Last error",
@@ -249,7 +250,36 @@
     "foundBooks": "Found {{count}} books",
     "failed": "Failed: {{error}}",
     "loadBookInfo": "Loading book info...",
-    "sourceNotFound": "Source not found"
+    "sourceNotFound": "Source not found",
+    "searchPlaceholder": "Search sources (try group:xxx)",
+    "emptyKinds": "This source has no explore categories",
+    "kindsFailed": "Failed to load categories",
+    "kindsRetry": "Retry",
+    "expand": "Expand",
+    "collapse": "Collapse",
+    "menu": {
+      "edit": "Edit source",
+      "top": "Pin to top",
+      "login": "Login",
+      "searchThis": "Search this source",
+      "refresh": "Refresh categories",
+      "delete": "Delete source",
+      "deleteConfirm": "Delete \"{{name}}\"?"
+    },
+    "show": {
+      "titlePrefix": "Explore /",
+      "loadMore": "Tap to load more",
+      "loading": "Loading…",
+      "noMore": "No more results",
+      "empty": "No books found"
+    },
+    "error": {
+      "load": "Failed to load explore list",
+      "explore": "Failed to load explore categories"
+    },
+    "errorDialog": {
+      "title": "Category error"
+    }
   },
   "bookDetail": {
     "loading": "Loading book info...",
