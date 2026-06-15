@@ -15,6 +15,7 @@ export function ExploreKindChip({
   if (isError) {
     return (
       <button
+        type="button"
         onClick={() => onErrorClick(kind)}
         style={{
           padding: '4px 12px',
@@ -39,6 +40,7 @@ export function ExploreKindChip({
 
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
       style={{
@@ -68,7 +70,6 @@ export function ExploreKindChip({
         e.currentTarget.style.borderColor = '#e0e0e0';
         e.currentTarget.style.color = '#555';
       }}
-      title={kind.title}
     >
       {kind.title}
     </button>
