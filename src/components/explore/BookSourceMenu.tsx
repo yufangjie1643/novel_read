@@ -6,7 +6,7 @@ import type { BookSourceGroup as Group } from '../../types';
 export type BookSourceAction = 'edit' | 'top' | 'login' | 'searchThis' | 'refresh' | 'delete';
 
 export function BookSourceMenu({
-  group,
+  group: _group,
   anchorEl,
   onClose,
   onAction,
@@ -54,7 +54,7 @@ export function BookSourceMenu({
   const items: { key: BookSourceAction; label: string; show: boolean }[] = [
     { key: 'edit', label: t('explore.menu.edit'), show: true },
     { key: 'top', label: t('explore.menu.top'), show: true },
-    { key: 'login', label: t('explore.menu.login'), show: group.hasLoginUrl },
+    { key: 'login', label: t('explore.menu.login'), show: true },
     { key: 'searchThis', label: t('explore.menu.searchThis'), show: true },
     { key: 'refresh', label: t('explore.menu.refresh'), show: true },
     { key: 'delete', label: t('explore.menu.delete'), show: true },

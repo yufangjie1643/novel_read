@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useDeferredValue } from 'react';
+import { useState, useEffect, useCallback, useRef, useDeferredValue, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { useNavigate } from 'react-router-dom';
@@ -224,7 +224,7 @@ export default function Explore() {
   }
 
   // Filter (client-side)
-  const visibleGroups = (() => {
+  const visibleGroups = useMemo(() => {
     const trimmed = deferredFilter.trim();
     if (!trimmed) return groups;
     if (trimmed.startsWith('group:')) {
@@ -236,11 +236,11 @@ export default function Explore() {
       if (g.sourceName.toLowerCase().includes(key)) return true;
       const kindsState = kindsBySource[g.sourceUrl];
       if (kindsState?.kind === 'ok') {
-        return kindsState.kinds.some((k) => k.title.toLowerCase().includes(key));
+        return kindsState.kinds.some((k: ExploreKind) => k.title.toLowerCase().includes(key));
       }
       return false;
     });
-  })();
+  }, [groups, deferredFilter, kindsBySource]);
 
   return (
     <div>
