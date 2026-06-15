@@ -18,6 +18,7 @@ import BookmarkButton from '../components/reader/BookmarkButton';
 import FullBookSearchPanel from '../components/reader/FullBookSearchPanel';
 import { flashRange } from '../components/reader/domHighlight';
 import { addBookmark } from '../components/reader/bookmarkActions';
+import { syncBookProgress } from '../components/reader/syncActions';
 
 /// Reader theme — chosen by the FAB theme-cycler button.
 /// `day`   — bright background, dark text (default light reading).
@@ -1603,6 +1604,35 @@ export default function Reader() {
               style={showSettings ? btnStyle(true) : btnStyle()}
             >
               {t('common.settings')}
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                if (!book) return;
+                try {
+                  const r = await syncBookProgress(book.book_url, 'auto');
+                  const key =
+                    r.status === 'uploaded'
+                      ? 'reader.sync.uploaded'
+                      : r.status === 'downloaded'
+                        ? 'reader.sync.downloaded'
+                        : r.status === 'skipped'
+                          ? 'reader.sync.skipped'
+                          : 'reader.sync.failed';
+                  const msg =
+                    r.status === 'failed'
+                      ? t(key, { error: r.error })
+                      : t(key);
+                  showToast(msg);
+                } catch (e) {
+                  showToast(t('reader.sync.failed', { error: String(e) }));
+                }
+              }}
+              data-testid="cloud-progress-btn"
+              title={t('reader.sync.title')}
+              style={btnStyle()}
+            >
+              {t('reader.sync.syncNow')}
             </button>
           </div>
         </div>
