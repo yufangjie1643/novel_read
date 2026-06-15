@@ -272,6 +272,7 @@
       "edit": "Edit source",
       "top": "Pin to top",
       "login": "Login",
+      "searchThis": "Search this source",
       "refresh": "Refresh categories",
       "delete": "Delete source",
       "deleteConfirm": "Delete \"{{name}}\"?"

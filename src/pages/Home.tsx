@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback, useTransition } from 'react';
 import { invoke, Channel } from '@tauri-apps/api/core';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type {
   ApiResponse,
@@ -184,6 +184,7 @@ const chipDangerStyle: React.CSSProperties = {
 export default function Home() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const { isMobileUi } = useUiMode();
   const [sources, setSources] = useState<BookSource[]>([]);
   const [searchKey, setSearchKey] = useState('');
@@ -194,6 +195,7 @@ export default function Home() {
   const currentChannelRef = useRef<Channel<SearchEvent> | null>(null);
   const currentRequestIdRef = useRef<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const scopedSearchHandledRef = useRef(false);
 
   // Keyboard shortcuts: /, ArrowUp/Down, Enter, Escape
   useEffect(() => {
@@ -318,10 +320,15 @@ export default function Home() {
   }
 
   const handleSearch = useCallback(
-    async (q: string) => {
+    async (q: string, enabledOverride?: BookSource[]) => {
       const trimmed = q.trim();
-      if (!trimmed) return;
-      const enabled = sources.filter((s) => s.enabled && s.search_url);
+      if (!trimmed) {
+        // Allow empty-string searches only when an explicit source scope is
+        // given (the "search this source" path uses '' + a single enabled
+        // source to surface that source's whole book list).
+        if (!enabledOverride || enabledOverride.length === 0) return;
+      }
+      const enabled = enabledOverride ?? sources.filter((s) => s.enabled && s.search_url);
       if (enabled.length === 0) {
         setState({ kind: 'error', message: t('home.noEnabledSources') });
         return;
@@ -376,6 +383,33 @@ export default function Home() {
     },
     [sources, t]
   );
+
+  // "Search this source" support: when arriving from `/explore` with
+  // `location.state.sourceScope`, narrow the search to just that one
+  // source's results. We can't pre-populate the search key (the v1
+  // streamer needs *something* to score on), so we pass an empty
+  // string + an enabled-list override containing only the scoped
+  // source. This surfaces the source's whole catalogue as if the
+  // user had clicked a "see all" link.
+  useEffect(() => {
+    if (scopedSearchHandledRef.current) return;
+    const scopeUrl = (location.state as { sourceScope?: string } | null)?.sourceScope;
+    if (!scopeUrl) return;
+    if (sources.length === 0) return;
+    const scoped = sources.filter(
+      (s) => s.book_source_url === scopeUrl && s.enabled && !!s.search_url
+    );
+    if (scoped.length === 0) {
+      console.warn('sourceScope not found or not searchable:', scopeUrl);
+      scopedSearchHandledRef.current = true;
+      return;
+    }
+    scopedSearchHandledRef.current = true;
+    // Clear the navigation state so a remount (e.g. back/forward) doesn't
+    // re-fire the scoped search.
+    window.history.replaceState({}, '');
+    void handleSearch('', scoped);
+  }, [location.state, sources, handleSearch]);
 
   const sortedResults: SearchBook[] = (() => {
     if (state.kind === 'streaming' || state.kind === 'stalled' || state.kind === 'done') {

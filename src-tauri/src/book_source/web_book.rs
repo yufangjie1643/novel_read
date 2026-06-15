@@ -177,13 +177,28 @@ impl WebBook {
         url: &str,
         page: Option<i32>,
     ) -> Result<Vec<SearchBook>, WebBookError> {
-        let analyze_url = AnalyzeUrl::new(
+        // Cookie foundation: if a cookie has been captured for this
+        // source (via the cookie table / `set_cookie` IPC), attach it
+        // to the request as a `Cookie` header. The in-process
+        // `JsExtState` cookie store is keyed by `source_url`; the
+        // `set_cookie` IPC command writes there on the JS side.
+        //
+        // TODO(next PR): when a cookie-capture WebView is added, also
+        // read from the `cookies` table directly (cookie-jar DB) so the
+        // cookie survives an app restart. For now, the in-process
+        // store is the single source of truth and is the path the
+        // existing `set_cookie` IPC populates.
+        let cookie = self.js_state.get_cookie(&source.book_source_url, None);
+        let mut analyze_url = AnalyzeUrl::new(
             url,
             Some(&source.book_source_url),
             None,
             page,
             self.js_state.clone(),
         );
+        if !cookie.is_empty() {
+            analyze_url.params.headers.insert("Cookie".to_string(), cookie);
+        }
 
         let body = analyze_url
             .get_str_response()
@@ -578,45 +593,87 @@ impl WebBook {
             return Ok(Vec::new());
         };
 
-        let chapter_list_rule = toc_rule.chapter_list.as_deref().unwrap_or("");
+        let chapter_list_rule_raw = toc_rule.chapter_list.as_deref().unwrap_or("");
 
-        if chapter_list_rule.is_empty() {
+        if chapter_list_rule_raw.is_empty() {
             return Ok(Vec::new());
         }
 
+        // Honor a leading "-" on the chapterList rule as a "reverse" flag,
+        // so sources that list chapters newest-first in the HTML can be
+        // flipped to chronological order without writing a separate rule.
+        let (reverse, chapter_list_rule) = if let Some(stripped) =
+            chapter_list_rule_raw.strip_prefix('-')
+        {
+            (true, stripped)
+        } else {
+            (false, chapter_list_rule_raw)
+        };
+
         let elements = self.executor.get_element_htmls(chapter_list_rule, &body);
-        let mut chapters = Vec::new();
         let base_url = &analyze_url.params.base_url;
-
-        for (index, element_html) in elements.into_iter().enumerate() {
-            let mut chapter = BookChapter {
-                index: index as i32,
-                ..Default::default()
-            };
-
+        // Two-pass dedup: many TOC pages (e.g. biquge mirrors) list
+        // chapters twice — once in a "latest updates" block at the
+        // top of the page, once in the full ordered list further
+        // down. We want the *full list* version, not the
+        // "latest updates" version, so we keep the LAST occurrence
+        // in document order (the "all chapters" block always
+        // appears after the "latest" block in biqusa-style HTML).
+        // First pass: collect (url, element_html) pairs.
+        let mut parsed: Vec<(String, String, String)> = Vec::new(); // (title, url, element_html)
+        for element_html in &elements {
             // Chapter name
-            if let Some(rule) = &toc_rule.chapter_name {
-                chapter.title = self
-                    .executor
-                    .get_string(rule, &element_html, Some(base_url));
-            }
-            if chapter.title.is_empty() {
+            let title = if let Some(rule) = &toc_rule.chapter_name {
+                self.executor.get_string(rule, element_html, Some(base_url))
+            } else {
+                String::new()
+            };
+            if title.is_empty() {
                 continue;
             }
-
             // Chapter URL
-            if let Some(rule) = &toc_rule.chapter_url {
-                let url = self
-                    .executor
-                    .get_string(rule, &element_html, Some(base_url));
-                chapter.url = Self::resolve_url(&url, base_url);
-            }
-            if chapter.url.is_empty() {
-                chapter.url = book.book_url.clone();
-            }
-            chapter.book_url = book.book_url.clone();
+            let url = if let Some(rule) = &toc_rule.chapter_url {
+                let raw = self.executor.get_string(rule, element_html, Some(base_url));
+                Self::resolve_url(&raw, base_url)
+            } else {
+                book.book_url.clone()
+            };
+            parsed.push((title, url, element_html.clone()));
+        }
 
+        // Second pass: keep only the LAST occurrence of each URL
+        // (i.e., the "all chapters" block, not the "latest" block).
+        // Build a map of url -> last index.
+        let mut last_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (i, (_t, u, _h)) in parsed.iter().enumerate() {
+            last_idx.insert(u.clone(), i);
+        }
+        let mut chapters: Vec<BookChapter> = Vec::new();
+        for (i, (title, url, _element_html)) in parsed.into_iter().enumerate() {
+            if last_idx.get(&url).copied() != Some(i) {
+                continue;
+            }
+            let chapter = BookChapter {
+                index: 0,
+                title,
+                url,
+                book_url: book.book_url.clone(),
+                ..Default::default()
+            };
             chapters.push(chapter);
+        }
+
+        if reverse {
+            // Reverse the deduped list so the chronologically-earliest
+            // chapter (e.g. 序章) ends up at index 0. Sources that
+            // publish newest-first in the HTML use this flag.
+            chapters.reverse();
+        }
+
+        // Re-index after dedup + reverse so indices are monotonic.
+        for (i, ch) in chapters.iter_mut().enumerate() {
+            ch.index = i as i32;
         }
 
         Ok(chapters)
@@ -694,4 +751,53 @@ pub enum WebBookError {
     Parse(String),
     #[error("Rule parse error: {0}")]
     RuleParse(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::book_source::js_extensions::JsExtState;
+    use crate::book_source::rule_parser::{RuleMode, RuleParser};
+    use std::sync::Arc;
+
+    fn book_url() -> &'static str {
+        "https://www.biqusa.com/45_45541/"
+    }
+
+    fn base_url() -> &'static str {
+        "https://www.biqusa.com/45_45541/"
+    }
+
+    fn make_toc_rule(chapter_list: &str, chapter_name: &str, chapter_url: &str) -> TocRule {
+        TocRule {
+            chapter_list: Some(chapter_list.to_string()),
+            chapter_name: Some(chapter_name.to_string()),
+            chapter_url: Some(chapter_url.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn dummy_webbook() -> WebBook {
+        WebBook::new(JsExtState::new())
+    }
+
+    #[test]
+    fn parse_single_rule_recognises_colon_prefix_as_regex() {
+        let parser = RuleParser::new();
+        let rules = parser.parse(r#":<a href="([^"]+)">([^<]+)</a>"#);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].mode, RuleMode::Regex);
+        assert_eq!(rules[0].rule, r#"<a href="([^"]+)">([^<]+)</a>"#);
+    }
+
+    #[test]
+    fn parse_single_rule_recognises_dash_colon_prefix_as_regex() {
+        let parser = RuleParser::new();
+        let rules = parser.parse(r#":-pattern"#);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].mode, RuleMode::Regex);
+        // The leading "-" is preserved so the executor can detect the
+        // "reverse" flag. See parse_chapter_list_regex.
+        assert_eq!(rules[0].rule, "-pattern");
+    }
 }

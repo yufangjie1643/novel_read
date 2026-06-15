@@ -2,15 +2,17 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
-export type BookSourceAction = 'edit' | 'top' | 'login' | 'refresh' | 'delete';
+export type BookSourceAction = 'edit' | 'top' | 'login' | 'searchThis' | 'refresh' | 'delete';
 
 const MENU_WIDTH = 180;
 
 export function BookSourceMenu({
+  group,
   anchorEl,
   onClose,
   onAction,
 }: {
+  group: { hasLoginUrl: boolean };
   anchorEl: HTMLElement | null;
   onClose: () => void;
   onAction: (action: BookSourceAction) => void;
@@ -45,7 +47,8 @@ export function BookSourceMenu({
   const items: { key: BookSourceAction; label: string; show: boolean }[] = [
     { key: 'edit', label: t('explore.menu.edit'), show: true },
     { key: 'top', label: t('explore.menu.top'), show: true },
-    { key: 'login', label: t('explore.menu.login'), show: true },
+    { key: 'login', label: t('explore.menu.login'), show: group.hasLoginUrl },
+    { key: 'searchThis', label: t('explore.menu.searchThis'), show: true },
     { key: 'refresh', label: t('explore.menu.refresh'), show: true },
     { key: 'delete', label: t('explore.menu.delete'), show: true },
   ];

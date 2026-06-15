@@ -162,6 +162,9 @@ export default function Explore() {
       case 'login':
         void openLogin(group.sourceUrl);
         return;
+      case 'searchThis':
+        navigate('/', { state: { sourceScope: group.sourceUrl } });
+        return;
       case 'refresh':
         setKindsBySource((prev) => {
           const next = { ...prev };
@@ -181,6 +184,15 @@ export default function Explore() {
       const resp = await invoke<ApiResponse<BookSource | null>>('get_book_source', { url: sourceUrl });
       if (resp.success && resp.data?.login_url) {
         await openUrl(resp.data.login_url);
+        // Cookie-capture foundation: log the current cookie state for
+        // this source. v1 still requires the user to log in via the
+        // system browser and manually paste a cookie via a follow-up
+        // "设置 Cookie" UI; this call site is the future hook.
+        try {
+          await invoke<ApiResponse<string | null>>('get_cookie', { url: sourceUrl });
+        } catch {
+          /* cookie plumbing is best-effort here */
+        }
       }
     } catch (e) {
       console.error('openLogin failed:', e);
@@ -378,6 +390,7 @@ export default function Explore() {
 
       {menuState && (
         <BookSourceMenu
+          group={menuState.group}
           anchorEl={menuState.anchorEl}
           onClose={() => setMenuState(null)}
           onAction={handleMenuAction}
@@ -456,7 +469,7 @@ function groupItems(items: ExploreItem[], summaries: Map<string, BookSourceSumma
         sourceUrl: item.source_url,
         sourceName: item.source_name,
         sourceGroup: summary?.bookSourceGroup ?? null,
-        hasLoginUrl: false,
+        hasLoginUrl: item.hasLoginUrl,
         weight: summary?.weight ?? 0,
         customOrder: summary?.customOrder ?? 0,
       });

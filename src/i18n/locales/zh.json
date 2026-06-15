@@ -272,6 +272,7 @@
       "edit": "编辑书源",
       "top": "置顶",
       "login": "登录",
+      "searchThis": "搜索该书源",
       "refresh": "刷新分类",
       "delete": "删除书源",
       "deleteConfirm": "确定要删除「{{name}}」吗？"

@@ -37,6 +37,7 @@ export interface ExploreItem {
   source_name: string;
   label: string;
   url: string;
+  hasLoginUrl: boolean;
 }
 
 export interface ExploreItemsPage {

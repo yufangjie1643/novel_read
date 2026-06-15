@@ -333,7 +333,7 @@ impl<'a> BookSourceDao<'a> {
     ) -> Result<ExploreItemsPage> {
         let conn = self.conn;
         let mut stmt = conn.prepare(
-            "SELECT bookSourceUrl, bookSourceName, exploreUrl FROM book_sources
+            "SELECT bookSourceUrl, bookSourceName, exploreUrl, loginUrl FROM book_sources
              WHERE enabledExplore = 1
                AND exploreUrl IS NOT NULL
                AND trim(exploreUrl) <> ''
@@ -344,6 +344,7 @@ impl<'a> BookSourceDao<'a> {
                 row.get::<_, String>("bookSourceUrl")?,
                 row.get::<_, String>("bookSourceName")?,
                 row.get::<_, Option<String>>("exploreUrl")?,
+                row.get::<_, Option<String>>("loginUrl")?,
             ))
         })?;
 
@@ -356,11 +357,19 @@ impl<'a> BookSourceDao<'a> {
         let mut items = Vec::with_capacity(limit.min(128));
 
         for row in rows {
-            let (source_url, source_name, explore_url) = row?;
+            let (source_url, source_name, explore_url, login_url) = row?;
             let source_name_lc = source_name.to_lowercase();
             let Some(explore_url) = explore_url else {
                 continue;
             };
+            // Compute has_login_url: loginUrl is present and non-empty
+            // after trimming. Mirrors the "is this source login-capable"
+            // check the frontend uses to gate the "登录" menu item.
+            let has_login_url = login_url
+                .as_deref()
+                .map(str::trim)
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
 
             for line in explore_url.lines() {
                 let trimmed = line.trim();
@@ -401,6 +410,7 @@ impl<'a> BookSourceDao<'a> {
                         source_name: source_name.clone(),
                         label,
                         url,
+                        has_login_url,
                     });
                 }
                 total += 1;
@@ -925,10 +935,14 @@ impl<'a> CookieDao<'a> {
     }
 
     pub fn insert_or_update(&self, url: &str, cookie: &str) -> Result<i64> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
         self.conn.execute(
-            r#"INSERT INTO cookies (url, cookie) VALUES (?1, ?2)
-               ON CONFLICT(url) DO UPDATE SET cookie = ?2"#,
-            params![url, cookie],
+            r#"INSERT INTO cookies (url, cookie, lastUpdateTime) VALUES (?1, ?2, ?3)
+               ON CONFLICT(url) DO UPDATE SET cookie = ?2, lastUpdateTime = ?3"#,
+            params![url, cookie, now],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -2034,6 +2048,27 @@ impl<'a> ChapterContentDao<'a> {
         } else {
             Ok(None)
         }
+    }
+
+    /// Get all cached chapter contents for a book, ordered by chapter index.
+    /// Returns Vec<(chapter_index, content)>.
+    pub fn get_all_by_book(&self, book_url: &str) -> Result<Vec<(i32, String)>> {
+        let conn = self.conn;
+        let mut stmt = conn.prepare(
+            "SELECT chapterIndex, content FROM chapter_contents
+             WHERE bookUrl = ?1
+             ORDER BY chapterIndex ASC",
+        )?;
+        let rows = stmt.query_map(params![book_url], |row| {
+            let idx: i32 = row.get(0)?;
+            let content: String = row.get(1)?;
+            Ok((idx, content))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     /// Delete all contents for a book

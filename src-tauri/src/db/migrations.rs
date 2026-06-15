@@ -328,7 +328,32 @@ CREATE TABLE IF NOT EXISTS source_stats (
     last_checked_at INTEGER NOT NULL DEFAULT 0,
     rolling_success_count INTEGER NOT NULL DEFAULT 0,
     rolling_total_count INTEGER NOT NULL DEFAULT 0,
-    health_score REAL NOT NULL DEFAULT 1.0
+    health_score REAL NOT NULL DEFAULT 1.0,
+    -- Per-operation counters and last-error columns. Each operation
+    -- (search / explore / chapter_list / chapter_content) tracks
+    -- its own success/error/timeout counts. The Sources page uses
+    -- these to show *which stage* of a book-source pipeline is
+    -- broken, not just a single health number.
+    search_ok INTEGER NOT NULL DEFAULT 0,
+    search_err INTEGER NOT NULL DEFAULT 0,
+    search_timeout INTEGER NOT NULL DEFAULT 0,
+    last_search_error TEXT,
+    last_search_at INTEGER,
+    explore_ok INTEGER NOT NULL DEFAULT 0,
+    explore_err INTEGER NOT NULL DEFAULT 0,
+    explore_timeout INTEGER NOT NULL DEFAULT 0,
+    last_explore_error TEXT,
+    last_explore_at INTEGER,
+    chapter_list_ok INTEGER NOT NULL DEFAULT 0,
+    chapter_list_err INTEGER NOT NULL DEFAULT 0,
+    chapter_list_timeout INTEGER NOT NULL DEFAULT 0,
+    last_chapter_list_error TEXT,
+    last_chapter_list_at INTEGER,
+    chapter_content_ok INTEGER NOT NULL DEFAULT 0,
+    chapter_content_err INTEGER NOT NULL DEFAULT 0,
+    chapter_content_timeout INTEGER NOT NULL DEFAULT 0,
+    last_chapter_content_error TEXT,
+    last_chapter_content_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_source_stats_health ON source_stats(health_score DESC);
 "#;
@@ -369,6 +394,51 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CREATE_RSS_READ_RECORDS_TABLE)?;
     conn.execute_batch(CREATE_CHAPTER_CONTENTS_TABLE)?;
     conn.execute_batch(CREATE_SOURCE_STATS_TABLE)?;
+
+    // --- Per-operation health columns (added later, migrate existing DBs) ---
+    // Use a helper so each ALTER TABLE is best-effort (ignore "duplicate
+    // column" errors on re-runs).
+    fn try_add_column(conn: &rusqlite::Connection, table: &str, column: &str, decl: &str) {
+        let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table, column, decl);
+        let _ = conn.execute(&sql, []);
+    }
+    for (col, decl) in [
+        ("search_ok", "INTEGER NOT NULL DEFAULT 0"),
+        ("search_err", "INTEGER NOT NULL DEFAULT 0"),
+        ("search_timeout", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_search_error", "TEXT"),
+        ("last_search_at", "INTEGER"),
+        ("explore_ok", "INTEGER NOT NULL DEFAULT 0"),
+        ("explore_err", "INTEGER NOT NULL DEFAULT 0"),
+        ("explore_timeout", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_explore_error", "TEXT"),
+        ("last_explore_at", "INTEGER"),
+        ("chapter_list_ok", "INTEGER NOT NULL DEFAULT 0"),
+        ("chapter_list_err", "INTEGER NOT NULL DEFAULT 0"),
+        ("chapter_list_timeout", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_chapter_list_error", "TEXT"),
+        ("last_chapter_list_at", "INTEGER"),
+        ("chapter_content_ok", "INTEGER NOT NULL DEFAULT 0"),
+        ("chapter_content_err", "INTEGER NOT NULL DEFAULT 0"),
+        ("chapter_content_timeout", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_chapter_content_error", "TEXT"),
+        ("last_chapter_content_at", "INTEGER"),
+    ] {
+        try_add_column(conn, "source_stats", col, decl);
+    }
+
+    // --- Cookie foundation: lastUpdateTime column for stale-cookie tracking ---
+    // The cookies table was created without a lastUpdateTime column; the
+    // legacy `get_cookie` / `set_cookie` IPC commands still work without it.
+    // Adding the column here is best-effort (no-op on legacy DBs that
+    // already have it).
+    try_add_column(conn, "cookies", "lastUpdateTime", "INTEGER NOT NULL DEFAULT 0");
+    // Make sure the URL is unique so the upsert's ON CONFLICT(url) clause
+    // works on legacy DBs that never had a unique index.
+    let _ = conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS index_cookies_url ON cookies(url)",
+        [],
+    );
 
     // --- P0 high-frequency secondary indices ---
     // All hot lookup paths used by DAOs (`WHERE bookUrl = ?`, group filters, RSS feeds…).

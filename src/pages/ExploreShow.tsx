@@ -80,6 +80,7 @@ export default function ExploreShow() {
               })
             );
           }
+          setBooksLoaded(true);
         } else {
           setMessage(t('explore.failed', { error: resp.error || 'unknown error' }));
           setHasMore(false);
@@ -116,12 +117,47 @@ export default function ExploreShow() {
       });
   }, [state.sourceUrl, loadedSource, t]);
 
+  // Track whether at least one page of books has ever been rendered
+  // for this source + explore URL. Used to gate the auto-scroll
+  // listener so the first scroll event on a fresh mount can't fire.
+  const [booksLoaded, setBooksLoaded] = useState(false);
+
+  // Auto-load more when within 200px of the bottom of the page.
+  // Gated on `booksLoaded` so the very first scroll event on a
+  // freshly-mounted empty page can't trigger a fetch.
+  useEffect(() => {
+    if (!booksLoaded) return;
+    let pending = false;
+    function onScroll() {
+      if (pending) return;
+      if (loading || !hasMore) return;
+      pending = true;
+      window.requestAnimationFrame(() => {
+        pending = false;
+        if (loading || !hasMore) return;
+        const scrollY = window.scrollY;
+        const innerHeight = window.innerHeight;
+        const scrollHeight = document.documentElement.scrollHeight;
+        if (scrollY + innerHeight + 200 >= scrollHeight) {
+          loadMore();
+        }
+      });
+    }
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+    // We intentionally exclude `loadMore`/`loading`/`hasMore` from the
+    // deps — the handler reads them via the closure, and we don't
+    // want to re-bind the scroll listener on every fetchBooks().
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [booksLoaded]);
+
   // Fetch books whenever source + exploreUrl are both available
   useEffect(() => {
     if (!loadedSource || !state.exploreUrl) return;
     pageRef.current = 1;
     setBooks([]);
     setHasMore(true);
+    setBooksLoaded(false);
     void fetchBooks(1, false);
   }, [loadedSource, state.exploreUrl, fetchBooks]);
 

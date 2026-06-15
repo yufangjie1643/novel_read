@@ -185,6 +185,8 @@ pub struct ExploreItem {
     pub source_name: String,
     pub label: String,
     pub url: String,
+    #[serde(rename = "hasLoginUrl")]
+    pub has_login_url: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -354,6 +356,8 @@ pub struct Cookie {
     pub id: Option<i64>,
     pub url: String,
     pub cookie: String,
+    #[serde(rename = "lastUpdateTime")]
+    pub last_update_time: i64,
 }
 
 // ============================================================================
