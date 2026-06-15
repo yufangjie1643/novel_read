@@ -59,11 +59,11 @@ export default function ContextMenu({ state, onClose, buildActions }: ContextMen
       const actions = buildActions(state.kind, state.selectedText ?? '');
       if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setFocusIndex((i) => Math.min(actions.length - 1, i + 1));
+        setFocusIndex((i) => (actions.length > 0 ? Math.min(actions.length - 1, i + 1) : 0));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setFocusIndex((i) => Math.max(0, i - 1));
-      } else if (e.key === 'Enter') {
+        setFocusIndex((i) => (actions.length > 0 ? Math.max(0, i - 1) : 0));
+      } else if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         const a = actions[focusIndex];
         if (a && !a.disabled) {
