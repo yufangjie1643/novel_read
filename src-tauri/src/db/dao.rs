@@ -2176,3 +2176,50 @@ impl<'a> BookProgressDao<'a> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn book_progress_dao_upsert_and_get() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE book_progress_sync (
+                bookUrl TEXT PRIMARY KEY,
+                lastLocalTime INTEGER NOT NULL,
+                lastRemoteTime INTEGER NOT NULL,
+                lastSyncedAt INTEGER NOT NULL,
+                remoteEtag TEXT
+            )",
+        )
+        .unwrap();
+
+        let dao = BookProgressDao::new(&conn);
+        let item = BookProgressSync {
+            book_url: "b1".to_string(),
+            last_local_time: 100,
+            last_remote_time: 200,
+            last_synced_at: 300,
+            remote_etag: Some("etag1".to_string()),
+        };
+        dao.upsert(&item).unwrap();
+        let got = dao.get("b1").unwrap().unwrap();
+        assert_eq!(got.last_local_time, 100);
+        assert_eq!(got.remote_etag.as_deref(), Some("etag1"));
+
+        // upsert overwrites
+        let updated = BookProgressSync {
+            last_local_time: 150,
+            ..item.clone()
+        };
+        dao.upsert(&updated).unwrap();
+        let got = dao.get("b1").unwrap().unwrap();
+        assert_eq!(got.last_local_time, 150);
+
+        // delete
+        dao.delete("b1").unwrap();
+        assert!(dao.get("b1").unwrap().is_none());
+    }
+}
