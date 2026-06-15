@@ -142,3 +142,88 @@ fn build_snippet(content: &str, pos: usize, kw_len: usize) -> String {
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    fn setup_test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE book_chapters (
+                bookUrl TEXT NOT NULL,
+                chapterUrl TEXT NOT NULL,
+                chapterIndex INTEGER NOT NULL,
+                chapterName TEXT
+            );
+            CREATE TABLE chapter_contents (
+                bookUrl TEXT NOT NULL,
+                chapterUrl TEXT NOT NULL,
+                content TEXT
+            );
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    fn insert_chapter(conn: &Connection, idx: i32, title: &str, content: &str) {
+        let url = format!("ch{}", idx);
+        conn.execute(
+            "INSERT INTO book_chapters (bookUrl, chapterUrl, chapterIndex, chapterName) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params!["book1", url, idx, title],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO chapter_contents (bookUrl, chapterUrl, content) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["book1", url, content],
+        ).unwrap();
+    }
+
+    #[test]
+    fn emits_started_done_and_correct_total() {
+        let conn = setup_test_db();
+        insert_chapter(&conn, 0, "第一章", "苹果和香蕉");
+        insert_chapter(&conn, 1, "第二章", "香蕉和苹果");
+        insert_chapter(&conn, 2, "第三章", "橘子");
+        let mut events = Vec::new();
+        run_fullbook_search(&conn, "book1", "苹果", |e| events.push(e));
+        assert!(matches!(events[0], FullBookSearchEvent::Started { total_chapters: 3 }));
+        let done = events.last().unwrap();
+        match done {
+            FullBookSearchEvent::Done { total_hits, .. } => assert_eq!(*total_hits, 2),
+            _ => panic!("expected Done event"),
+        }
+    }
+
+    #[test]
+    fn snippet_truncates_with_ellipsis() {
+        let s = "abcdefghijklmnopqrstuvwxyz";
+        let snippet = build_snippet(s, 10, 3);
+        assert!(snippet.starts_with('…'));
+        assert!(snippet.ends_with('…'));
+    }
+
+    #[test]
+    fn empty_keyword_emits_failed() {
+        let conn = setup_test_db();
+        insert_chapter(&conn, 0, "X", "anything");
+        let mut events = Vec::new();
+        run_fullbook_search(&conn, "book1", "", |e| events.push(e));
+        assert!(matches!(events[0], FullBookSearchEvent::Failed { .. }));
+    }
+
+    #[test]
+    fn chapter_with_no_content_is_scanned_but_no_hit() {
+        let conn = setup_test_db();
+        conn.execute(
+            "INSERT INTO book_chapters (bookUrl, chapterUrl, chapterIndex, chapterName) VALUES ('book1', 'ch0', 0, 'X')",
+            [],
+        ).unwrap();
+        let mut events = Vec::new();
+        run_fullbook_search(&conn, "book1", "key", |e| events.push(e));
+        let hits: Vec<_> = events.iter().filter(|e| matches!(e, FullBookSearchEvent::Hit { .. })).collect();
+        assert_eq!(hits.len(), 0);
+    }
+}
