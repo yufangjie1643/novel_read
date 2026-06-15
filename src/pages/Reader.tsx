@@ -15,6 +15,8 @@ import ContextMenu, { type ContextMenuState } from '../components/reader/Context
 import NavSettingsPopover from '../components/reader/NavSettingsPopover';
 import ShortcutsHelpModal from '../components/reader/ShortcutsHelpModal';
 import BookmarkButton from '../components/reader/BookmarkButton';
+import FullBookSearchPanel from '../components/reader/FullBookSearchPanel';
+import { flashRange } from '../components/reader/domHighlight';
 import { addBookmark } from '../components/reader/bookmarkActions';
 
 /// Reader theme — chosen by the FAB theme-cycler button.
@@ -126,6 +128,10 @@ export default function Reader() {
   const [showNavSettings, setShowNavSettings] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [selectedText, setSelectedText] = useState('');
+  /// `null` = search panel closed; `''` = open with empty input;
+  /// non-empty string = open with prefilled keyword (right-click
+  /// "Search in Book" passes the selected text here).
+  const [searchKeyword, setSearchKeyword] = useState<string | null>(null);
   const [toast, setToast] = useState<string>('');
 
   const showToast = useCallback((msg: string) => {
@@ -1180,11 +1186,6 @@ export default function Reader() {
             goToChapter(nextChapterRef.current.index);
           }
           break;
-        case 'Escape':
-          navigate(`/book/${encodeURIComponent(decodedUrl)}`, {
-            state: { parent: readerParentPath.current },
-          });
-          break;
         case ' ':
           e.preventDefault();
           if (isSpeakingRef.current) {
@@ -1249,7 +1250,7 @@ export default function Reader() {
     onNextChapter: () => nextChapter && goToNextChapter(),
     onFirstChapter: () => chapters[0] && goToChapter(0),
     onLastChapter: () => chapters.length > 0 && goToChapter(chapters.length - 1),
-    onOpenSearch: () => setReaderPanel('search'),
+    onOpenSearch: () => setSearchKeyword(''),
     onAddBookmark: () => doAddBookmark(''),
     onOpenBookmarkList: () => navigate('/bookmarks'),
     onToggleToolbar: () => nav.setPrefs({ ...nav.prefs, stickyToolbar: !nav.prefs.stickyToolbar }),
@@ -3049,7 +3050,7 @@ export default function Reader() {
               labelKey: 'reader.contextMenu.searchBook',
               icon: '🔍',
               disabled: !hasText,
-              onSelect: () => setReaderPanel('search'),
+              onSelect: () => setSearchKeyword(text),
             });
           } else {
             items.push({
@@ -3084,6 +3085,29 @@ export default function Reader() {
       )}
 
       <ShortcutsHelpModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+
+      {/* Full-book search panel — opened by the nav-hook search shortcut
+          or by the right-click "Search in Book" item. Stays open across
+          chapter changes so the user can keep an eye on results while
+          we navigate. */}
+      {searchKeyword !== null && (
+        <FullBookSearchPanel
+          bookUrl={book?.book_url ?? ''}
+          initialKeyword={searchKeyword}
+          onJumpTo={(chapterIndex, position, length) => {
+            setSearchKeyword(null);
+            if (chapterIndex !== idx) {
+              goToChapter(chapterIndex);
+            }
+            // Wait for the chapter DOM to mount before attempting to
+            // flash — the navigate() above triggers a content swap.
+            window.setTimeout(() => {
+              flashRange(contentRef.current, position, length);
+            }, 400);
+          }}
+          onClose={() => setSearchKeyword(null)}
+        />
+      )}
 
       {toast && (
         <div
