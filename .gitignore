@@ -8,6 +8,10 @@ target/
 # Frontend
 dist/
 .vite/
+out/
+
+# Local helper binary shims
+.bin-shim/
 
 # Tauri Android (also handled by src-tauri/gen/android/.gitignore)
 src-tauri/gen/android/.gradle/
@@ -33,12 +37,42 @@ src-tauri/.cargo/
 # ---------- Generated test / capture artifacts ----------
 test-artifacts/
 
-# ---------- Logs ----------
+# Debug screenshots / UI dumps from local dev tools
+bug-*.png
+bug-*.jpg
+dev-*.png
+dev-*.jpg
+dev-*.xml
+device-*.png
+device-*.jpg
+device-*.xml
+device-*.db
+fix-*.png
+fix-*.jpg
+nav-test-*.png
+sweep-*.png
+tab-test-*.png
+ugly-*.png
+ugly-*.jpg
+verify-*.png
+verify-*.jpg
+verify-*.db
+web-explore-*.png
+web-explore-*.jpg
+web-explore-*.mjs
+resume-*.png
+
+# ---------- Logs / scratch outputs ----------
 *.log
 pnpm-debug.log*
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+out.txt
+err.txt
+dbq.txt
+probe_out.txt
+probe_cm_output.txt
 
 # ---------- Environment / secrets ----------
 .env
@@ -49,6 +83,7 @@ yarn-error.log*
 .claude/
 .codegraph/
 .agents/
+agent-skills/
 adb-apk-debug-workflow/
 
 # ---------- Editors / IDEs ----------
@@ -62,3 +97,32 @@ adb-apk-debug-workflow/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# ---------- Temporary / working DBs ----------
+cm-*.db
+probe-*.db
+*-shm
+*-wal
+
+# ---------- HTML / Playground dumps ----------
+aoaostar.html
+ui*.xml
+
+# ---------- Scripts / probes for local debugging ----------
+cdp-*.js
+cdp-*.mjs
+check-i18n.mjs
+detect-encoding.ps1
+dump-dialog.ps1
+find_*.ps1
+inspect_db.py
+probe_*.py
+test-parser.ps1
+test-regex.ps1
+tools/
+web-explore*.mjs
+
+# ---------- Misc untracked experimental directories ----------
+dev/
+novel_read-*/
+scripts/test-*.mjs
