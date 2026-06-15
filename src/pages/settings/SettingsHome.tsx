@@ -20,7 +20,9 @@ export default function SettingsHome({ fontSize }: Props) {
 
       <div className="android-stats-row">
         <div>
-          <strong>{i18n.language.startsWith('zh') ? t('layout.langZh') : t('layout.langEn')}</strong>
+          <strong>
+            {i18n.language.startsWith('zh') ? t('layout.langZh') : t('layout.langEn')}
+          </strong>
           <span>{t('settings.currentLanguage')}</span>
         </div>
         <div>

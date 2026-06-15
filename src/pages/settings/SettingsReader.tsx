@@ -6,9 +6,18 @@ export default function SettingsReader() {
   const { t } = useTranslation();
   const { sectionStyle, sectionTitle, rowStyle, labelStyle } = useSettingsStyles();
   const {
-    fontSize, theme, ttsRate, lineHeight, paragraphSpacing, searchConcurrency,
-    updateFontSize, updateTheme, updateTtsRate, updateLineHeight,
-    updateParagraphSpacing, updateSearchConcurrency,
+    fontSize,
+    theme,
+    ttsRate,
+    lineHeight,
+    paragraphSpacing,
+    searchConcurrency,
+    updateFontSize,
+    updateTheme,
+    updateTtsRate,
+    updateLineHeight,
+    updateParagraphSpacing,
+    updateSearchConcurrency,
   } = useReaderPrefs();
 
   return (

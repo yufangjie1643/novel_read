@@ -32,16 +32,16 @@ export function useReaderPrefs() {
     setTtsRate(Number(localStorage.getItem(KEY_MAP.ttsRate)) || DEFAULTS.ttsRate);
     setLineHeight(Number(localStorage.getItem(KEY_MAP.lineHeight)) || DEFAULTS.lineHeight);
     setParagraphSpacing(
-      Number(localStorage.getItem(KEY_MAP.paragraphSpacing)) || DEFAULTS.paragraphSpacing,
+      Number(localStorage.getItem(KEY_MAP.paragraphSpacing)) || DEFAULTS.paragraphSpacing
     );
     setSearchConcurrency(
       Math.max(
         1,
         Math.min(
           20,
-          Number(localStorage.getItem(KEY_MAP.searchConcurrency)) || DEFAULTS.searchConcurrency,
-        ),
-      ),
+          Number(localStorage.getItem(KEY_MAP.searchConcurrency)) || DEFAULTS.searchConcurrency
+        )
+      )
     );
   }, []);
 
@@ -89,8 +89,18 @@ export function useReaderPrefs() {
   }, []);
 
   return {
-    fontSize, theme, ttsRate, lineHeight, paragraphSpacing, searchConcurrency,
-    updateFontSize, updateTheme, updateTtsRate, updateLineHeight,
-    updateParagraphSpacing, updateSearchConcurrency, reset,
+    fontSize,
+    theme,
+    ttsRate,
+    lineHeight,
+    paragraphSpacing,
+    searchConcurrency,
+    updateFontSize,
+    updateTheme,
+    updateTtsRate,
+    updateLineHeight,
+    updateParagraphSpacing,
+    updateSearchConcurrency,
+    reset,
   };
 }

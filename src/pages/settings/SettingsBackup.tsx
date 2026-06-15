@@ -6,9 +6,17 @@ export default function SettingsBackup() {
   const { t } = useTranslation();
   const { sectionStyle, sectionTitle } = useSettingsStyles();
   const {
-    davUrl, setDavUrl, davUser, setDavUser, davPass, setDavPass,
-    davMessage, davLoading,
-    testWebDav, backupToWebDav, restoreFromWebDav,
+    davUrl,
+    setDavUrl,
+    davUser,
+    setDavUser,
+    davPass,
+    setDavPass,
+    davMessage,
+    davLoading,
+    testWebDav,
+    backupToWebDav,
+    restoreFromWebDav,
   } = useWebDav();
 
   return (

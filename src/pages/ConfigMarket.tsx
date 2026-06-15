@@ -323,7 +323,11 @@ export default function ConfigMarket() {
     const item = RECOMMENDED_SOURCES.find((s) => s.key === key);
     if (!item || recommendImporting) return;
     setRecommendImporting(key);
-    setMessage(t('configMarket.oneClickImporting', { name: t(`configMarket.rec_${key}_name`, { defaultValue: item.nameZh }) }));
+    setMessage(
+      t('configMarket.oneClickImporting', {
+        name: t(`configMarket.rec_${key}_name`, { defaultValue: item.nameZh }),
+      })
+    );
     try {
       const command = {
         bookSource: 'import_source_from_url',
@@ -632,7 +636,7 @@ export default function ConfigMarket() {
     cursor: 'pointer',
   };
 
-return (
+  return (
     <div>
       <section style={cardStyle}>
         <h1 style={{ margin: '0 0 6px', fontSize: 24, fontWeight: 700, color: '#1a1a2e' }}>

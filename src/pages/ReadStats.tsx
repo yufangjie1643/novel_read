@@ -78,7 +78,9 @@ export default function ReadStats() {
             flex: 1,
           }}
         >
-          <div style={{ fontSize: 13, color: '#888', marginBottom: 6 }}>{t('readStats.totalBooks')}</div>
+          <div style={{ fontSize: 13, color: '#888', marginBottom: 6 }}>
+            {t('readStats.totalBooks')}
+          </div>
           <div style={{ fontSize: 28, fontWeight: 700, color: '#1976d2' }}>{totalBooks}</div>
         </div>
         <div
@@ -91,8 +93,12 @@ export default function ReadStats() {
             flex: 1,
           }}
         >
-          <div style={{ fontSize: 13, color: '#888', marginBottom: 6 }}>{t('readStats.totalTime')}</div>
-          <div style={{ fontSize: 28, fontWeight: 700, color: '#1976d2' }}>{formatDuration(totalTime)}</div>
+          <div style={{ fontSize: 13, color: '#888', marginBottom: 6 }}>
+            {t('readStats.totalTime')}
+          </div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: '#1976d2' }}>
+            {formatDuration(totalTime)}
+          </div>
         </div>
       </div>
 

@@ -8,14 +8,23 @@ export default function SettingsBulkImport() {
   const { isMobileUi } = useUiMode();
   const { sectionStyle, sectionTitle } = useSettingsStyles();
   const {
-    bulkImportUrl, setBulkImportUrl,
-    bulkLinks, bulkSelected, setBulkSelected,
-    bulkLoading, bulkImporting,
+    bulkImportUrl,
+    setBulkImportUrl,
+    bulkLinks,
+    bulkSelected,
+    setBulkSelected,
+    bulkLoading,
+    bulkImporting,
     bulkMessage,
-    selectedBulkCount, supportedBulkCount,
-    importTypeLabel, isSupportedImportLink, importLinkKey,
+    selectedBulkCount,
+    supportedBulkCount,
+    importTypeLabel,
+    isSupportedImportLink,
+    importLinkKey,
     setSelectedSupportedLinks,
-    loadBulkImportLinks, toggleBulkLink, importSelectedBulkLinks,
+    loadBulkImportLinks,
+    toggleBulkLink,
+    importSelectedBulkLinks,
   } = useBulkImport();
 
   return (

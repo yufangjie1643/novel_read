@@ -24,33 +24,35 @@ export function useBulkImport() {
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
   const [bulkImporting, setBulkImporting] = useState(false);
-  const [bulkMessage, setBulkMessage] = useState<{ text: string; kind: 'idle' | 'error' | 'info' }>({
-    text: '',
-    kind: 'idle',
-  });
+  const [bulkMessage, setBulkMessage] = useState<{ text: string; kind: 'idle' | 'error' | 'info' }>(
+    {
+      text: '',
+      kind: 'idle',
+    }
+  );
 
   const importTypeLabel = useCallback(
     (type: string) => t(`settings.importType.${type}`, { defaultValue: type }),
-    [t],
+    [t]
   );
 
   const isSupportedImportLink = useCallback(
     (link: SourceLink) => SUPPORTED_IMPORT_TYPES.has(link.link_type),
-    [],
+    []
   );
 
   const setSelectedSupportedLinks = useCallback(
     (links: SourceLink[]) => {
       setBulkSelected(new Set(links.filter(isSupportedImportLink).map(importLinkKey)));
     },
-    [isSupportedImportLink],
+    [isSupportedImportLink]
   );
 
   const addAll = useCallback(
-    async <T,>(
+    async <T>(
       items: T[],
       command: string,
-      argName: string,
+      argName: string
     ): Promise<{ success: number; failed: number }> => {
       let success = 0;
       let failed = 0;
@@ -65,7 +67,7 @@ export function useBulkImport() {
       }
       return { success, failed };
     },
-    [],
+    []
   );
 
   const toggleBulkLink = useCallback((link: SourceLink) => {
@@ -117,7 +119,7 @@ export function useBulkImport() {
 
       return { success: 0, failed: 0 };
     },
-    [addAll],
+    [addAll]
   );
 
   const loadBulkImportLinks = useCallback(async () => {
@@ -190,7 +192,7 @@ export function useBulkImport() {
   const selectedBulkCount = useMemo(() => bulkSelected.size, [bulkSelected]);
   const supportedBulkCount = useMemo(
     () => bulkLinks.filter(isSupportedImportLink).length,
-    [bulkLinks, isSupportedImportLink],
+    [bulkLinks, isSupportedImportLink]
   );
 
   return {

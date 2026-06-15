@@ -43,7 +43,10 @@ export function useWebDav() {
         localStorage.setItem(KEY_MAP.url, davUrl.trim());
         localStorage.setItem(KEY_MAP.user, davUser.trim());
       } else {
-        setDavMessage({ text: t('settings.davTestFailed', { error: resp.error || '' }), kind: 'error' });
+        setDavMessage({
+          text: t('settings.davTestFailed', { error: resp.error || '' }),
+          kind: 'error',
+        });
       }
     } catch (e) {
       setDavMessage({ text: t('common.error', { message: String(e) }), kind: 'error' });
@@ -67,9 +70,15 @@ export function useWebDav() {
         password: davPass.trim() || null,
       });
       if (resp.success) {
-        setDavMessage({ text: t('settings.davBackupSuccess', { name: resp.data || '' }), kind: 'info' });
+        setDavMessage({
+          text: t('settings.davBackupSuccess', { name: resp.data || '' }),
+          kind: 'info',
+        });
       } else {
-        setDavMessage({ text: t('settings.davBackupFailed', { error: resp.error || '' }), kind: 'error' });
+        setDavMessage({
+          text: t('settings.davBackupFailed', { error: resp.error || '' }),
+          kind: 'error',
+        });
       }
     } catch (e) {
       setDavMessage({ text: t('common.error', { message: String(e) }), kind: 'error' });
@@ -96,7 +105,10 @@ export function useWebDav() {
       if (resp.success) {
         setDavMessage({ text: t('settings.davRestoreSuccess'), kind: 'info' });
       } else {
-        setDavMessage({ text: t('settings.davRestoreFailed', { error: resp.error || '' }), kind: 'error' });
+        setDavMessage({
+          text: t('settings.davRestoreFailed', { error: resp.error || '' }),
+          kind: 'error',
+        });
       }
     } catch (e) {
       setDavMessage({ text: t('common.error', { message: String(e) }), kind: 'error' });
@@ -106,11 +118,16 @@ export function useWebDav() {
   }, [davUrl, davUser, davPass, davLoading, t]);
 
   return {
-    davUrl, setDavUrl,
-    davUser, setDavUser,
-    davPass, setDavPass,
+    davUrl,
+    setDavUrl,
+    davUser,
+    setDavUser,
+    davPass,
+    setDavPass,
     davMessage,
     davLoading,
-    testWebDav, backupToWebDav, restoreFromWebDav,
+    testWebDav,
+    backupToWebDav,
+    restoreFromWebDav,
   };
 }
