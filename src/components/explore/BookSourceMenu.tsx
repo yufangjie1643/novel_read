@@ -1,8 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
 export type BookSourceAction = 'edit' | 'top' | 'login' | 'refresh' | 'delete';
+
+const MENU_WIDTH = 180;
 
 export function BookSourceMenu({
   anchorEl,
@@ -15,18 +17,6 @@ export function BookSourceMenu({
 }) {
   const { t } = useTranslation();
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-
-  useLayoutEffect(() => {
-    if (!anchorEl || !panelRef.current) return;
-    const rect = anchorEl.getBoundingClientRect();
-    const panel = panelRef.current;
-    const menuW = panel.offsetWidth;
-    const menuH = panel.offsetHeight;
-    const top = Math.min(rect.bottom + 4, window.innerHeight - menuH - 8);
-    const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuW - 8));
-    setPos({ top, left });
-  }, [anchorEl]);
 
   useEffect(() => {
     if (!anchorEl) return;
@@ -46,7 +36,11 @@ export function BookSourceMenu({
     };
   }, [anchorEl, onClose]);
 
-  if (!anchorEl || !pos) return null;
+  if (!anchorEl) return null;
+
+  const rect = anchorEl.getBoundingClientRect();
+  const top = Math.min(rect.bottom + 4, window.innerHeight - 200);
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - MENU_WIDTH - 8));
 
   const items: { key: BookSourceAction; label: string; show: boolean }[] = [
     { key: 'edit', label: t('explore.menu.edit'), show: true },
@@ -62,8 +56,8 @@ export function BookSourceMenu({
       role="menu"
       style={{
         position: 'fixed',
-        top: pos.top,
-        left: pos.left,
+        top,
+        left,
         zIndex: 1000,
         background: '#fff',
         border: '1px solid #e0e0e0',
