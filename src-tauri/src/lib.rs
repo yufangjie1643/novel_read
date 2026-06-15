@@ -188,6 +188,7 @@ pub fn run() {
             cancel_search,
             get_last_search,
             update_search_settings,
+            cache_cover,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
