@@ -179,7 +179,7 @@ export default function Reader() {
   const [textAlign, setTextAlign] = useState(() => {
     return localStorage.getItem('reader_text_align') || 'justify';
   });
-  const [contentWidth, _setContentWidth] = useState(() => {
+  const [contentWidth] = useState(() => {
     return parseInt(localStorage.getItem('reader_content_width') || '760', 10);
   });
   /// Background opacity 0-100. 100 = solid theme bg; 0 = transparent
