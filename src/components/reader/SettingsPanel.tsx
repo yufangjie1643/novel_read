@@ -1,11 +1,7 @@
 import { useTranslation } from 'react-i18next';
-
+import { useReaderSettings, type PageAnim, type TipKind } from './ReaderSettingsContext';
 
 const THEME_CYCLE = ['day', 'night', 'eink'] as const;
-type Theme = (typeof THEME_CYCLE)[number];
-type PageAnim = 'cover' | 'slide' | 'simulation' | 'scroll' | 'none';
-type TipKind = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11;
-
 const TIP_KIND_KEYS: TipKind[] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 const TIP_KIND_I18N: Record<TipKind, string> = {
   0: 'none',
@@ -27,41 +23,8 @@ const TIP_OPTIONS = TIP_KIND_KEYS.map((k) => ({
   labelKey: `reader.tipKind.${TIP_KIND_I18N[k]}`,
 }));
 
-export type SettingsPanelProps = {
-  open: boolean;
-  isMobileUi: boolean;
-  baseBg: string;
-  border: string;
-  text: string;
-  fontSize: number;
-  setFontSize: (n: number) => void;
-  fontFamily: string;
-  setFontFamily: (f: string) => void;
-  lineHeight: number;
-  setLineHeight: (n: number) => void;
-  paragraphSpacing: number;
-  setParagraphSpacing: (n: number) => void;
-  theme: Theme;
-  setTheme: (t: Theme) => void;
-  pageAnim: PageAnim;
-  updatePageAnim: (p: PageAnim) => void;
-  ttsRate: number;
-  setTtsRate: (n: number) => void;
-  bgAlpha: number;
-  setBgAlpha: (n: number) => void;
-  tipHeaderLeft: TipKind;
-  setTipHeaderLeft: (k: TipKind) => void;
-  tipHeaderRight: TipKind;
-  setTipHeaderRight: (k: TipKind) => void;
-  tipFooterLeft: TipKind;
-  setTipFooterLeft: (k: TipKind) => void;
-  tipFooterRight: TipKind;
-  setTipFooterRight: (k: TipKind) => void;
-  onClose: () => void;
-};
-
-const btnStyle = (active?: boolean, isMobileUi?: boolean): React.CSSProperties => ({
-  padding: isMobileUi ? '7px 10px' : '6px 14px',
+const btnStyle = (active?: boolean): React.CSSProperties => ({
+  padding: '6px 14px',
   borderRadius: 8,
   border: '1px solid var(--reader-menu-border, #e8e8f0)',
   background: active ? '#1976d2' : 'var(--reader-menu-button, #f5f7fa)',
@@ -80,17 +43,21 @@ const labelStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
-export default function SettingsPanel(props: SettingsPanelProps) {
+/**
+ * Renders the full reader settings UI. Reads/writes state from
+ * `ReaderSettingsContext`. Used by:
+ *   - the inline panel inside the Reader (in the fixed header)
+ *   - the standalone `/reader/.../settings` page
+ */
+export default function SettingsPanel() {
   const { t } = useTranslation();
-  if (!props.open) return null;
-  if (props.isMobileUi) return null;
+  const s = useReaderSettings();
 
   return (
     <div
       style={{
-        background: props.baseBg,
-        borderBottom: `1px solid ${props.border}`,
-        padding: '10px 20px',
+        background: s.baseBg,
+        padding: '14px 20px 18px',
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
         gap: '12px 16px',
@@ -109,8 +76,8 @@ export default function SettingsPanel(props: SettingsPanelProps) {
         ] as { key: PageAnim; label: string }[]).map((item) => (
           <button
             key={item.key}
-            onClick={() => props.updatePageAnim(item.key)}
-            style={props.pageAnim === item.key ? btnStyle(true) : btnStyle()}
+            onClick={() => s.updatePageAnim(item.key)}
+            style={s.pageAnim === item.key ? btnStyle(true) : btnStyle()}
           >
             {item.label}
           </button>
@@ -124,16 +91,16 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           min={12}
           max={32}
           step={1}
-          value={props.fontSize}
+          value={s.fontSize}
           onChange={(e) => {
-            const s = parseInt(e.target.value, 10);
-            props.setFontSize(s);
-            localStorage.setItem('reader_font_size', String(s));
+            const v = parseInt(e.target.value, 10);
+            s.setFontSize(v);
+            localStorage.setItem('reader_font_size', String(v));
           }}
           style={{ verticalAlign: 'middle', width: 80, minWidth: 60 }}
         />
         <span style={{ fontSize: 13, fontWeight: 600, minWidth: 30, textAlign: 'center' }}>
-          {props.fontSize}px
+          {s.fontSize}px
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -142,10 +109,10 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           <button
             key={tName}
             onClick={() => {
-              props.setTheme(tName);
+              s.setTheme(tName);
               localStorage.setItem('reader_theme', tName);
             }}
-            style={props.theme === tName ? btnStyle(true) : btnStyle()}
+            style={s.theme === tName ? btnStyle(true) : btnStyle()}
           >
             {t(`reader.themeCycle.${tName}`)}
           </button>
@@ -158,15 +125,15 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           min="0.5"
           max="2"
           step="0.1"
-          value={props.ttsRate}
+          value={s.ttsRate}
           onChange={(e) => {
-            const r = parseFloat(e.target.value);
-            props.setTtsRate(r);
-            localStorage.setItem('reader_tts_rate', String(r));
+            const v = parseFloat(e.target.value);
+            s.setTtsRate(v);
+            localStorage.setItem('reader_tts_rate', String(v));
           }}
           style={{ verticalAlign: 'middle', width: 60, minWidth: 50 }}
         />
-        <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>{props.ttsRate}x</span>
+        <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>{s.ttsRate}x</span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span style={labelStyle}>{t('reader.lineHeight')}</span>
@@ -175,16 +142,16 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           min={1.2}
           max={2.5}
           step={0.1}
-          value={props.lineHeight}
+          value={s.lineHeight}
           onChange={(e) => {
             const v = parseFloat(e.target.value);
-            props.setLineHeight(v);
+            s.setLineHeight(v);
             localStorage.setItem('reader_line_height', String(v));
           }}
           style={{ verticalAlign: 'middle', width: 60, minWidth: 50 }}
         />
         <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>
-          {props.lineHeight.toFixed(1)}
+          {s.lineHeight.toFixed(1)}
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -194,16 +161,16 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           min={0}
           max={2}
           step={0.1}
-          value={props.paragraphSpacing}
+          value={s.paragraphSpacing}
           onChange={(e) => {
             const v = parseFloat(e.target.value);
-            props.setParagraphSpacing(v);
+            s.setParagraphSpacing(v);
             localStorage.setItem('reader_paragraph_spacing', String(v));
           }}
           style={{ verticalAlign: 'middle', width: 60, minWidth: 50 }}
         />
         <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>
-          {props.paragraphSpacing.toFixed(1)}em
+          {s.paragraphSpacing.toFixed(1)}em
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -216,10 +183,10 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           <button
             key={f.key}
             onClick={() => {
-              props.setFontFamily(f.key);
+              s.setFontFamily(f.key);
               localStorage.setItem('reader_font_family', f.key);
             }}
-            style={props.fontFamily === f.key ? btnStyle(true) : btnStyle()}
+            style={s.fontFamily === f.key ? btnStyle(true) : btnStyle()}
           >
             {f.label}
           </button>
@@ -229,13 +196,13 @@ export default function SettingsPanel(props: SettingsPanelProps) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', gridColumn: '1 / -1' }}>
         <span style={labelStyle}>{t('reader.tipHeaderLeft')}</span>
         <select
-          value={props.tipHeaderLeft}
+          value={s.tipHeaderLeft}
           onChange={(e) => {
             const v = parseInt(e.target.value, 10) as TipKind;
-            props.setTipHeaderLeft(v);
+            s.setTipHeaderLeft(v);
             localStorage.setItem('reader_tip_header_left', String(v));
           }}
-          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${props.border}` }}
+          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${s.border}` }}
         >
           {TIP_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -244,13 +211,13 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           ))}
         </select>
         <select
-          value={props.tipHeaderRight}
+          value={s.tipHeaderRight}
           onChange={(e) => {
             const v = parseInt(e.target.value, 10) as TipKind;
-            props.setTipHeaderRight(v);
+            s.setTipHeaderRight(v);
             localStorage.setItem('reader_tip_header_right', String(v));
           }}
-          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${props.border}` }}
+          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${s.border}` }}
         >
           {TIP_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -260,13 +227,13 @@ export default function SettingsPanel(props: SettingsPanelProps) {
         </select>
         <span style={labelStyle}>{t('reader.tipFooterLeft')}</span>
         <select
-          value={props.tipFooterLeft}
+          value={s.tipFooterLeft}
           onChange={(e) => {
             const v = parseInt(e.target.value, 10) as TipKind;
-            props.setTipFooterLeft(v);
+            s.setTipFooterLeft(v);
             localStorage.setItem('reader_tip_footer_left', String(v));
           }}
-          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${props.border}` }}
+          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${s.border}` }}
         >
           {TIP_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -275,13 +242,13 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           ))}
         </select>
         <select
-          value={props.tipFooterRight}
+          value={s.tipFooterRight}
           onChange={(e) => {
             const v = parseInt(e.target.value, 10) as TipKind;
-            props.setTipFooterRight(v);
+            s.setTipFooterRight(v);
             localStorage.setItem('reader_tip_footer_right', String(v));
           }}
-          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${props.border}` }}
+          style={{ padding: '4px 8px', borderRadius: 4, border: `1px solid ${s.border}` }}
         >
           {TIP_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
@@ -298,20 +265,15 @@ export default function SettingsPanel(props: SettingsPanelProps) {
           min={0}
           max={100}
           step={5}
-          value={props.bgAlpha}
+          value={s.bgAlpha}
           onChange={(e) => {
             const v = parseInt(e.target.value, 10);
-            props.setBgAlpha(v);
+            s.setBgAlpha(v);
             localStorage.setItem('reader_bg_alpha', String(v));
           }}
           style={{ verticalAlign: 'middle', width: 100, minWidth: 80 }}
         />
-        <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>{props.bgAlpha}</span>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-        <button type="button" onClick={props.onClose} style={btnStyle()}>
-          {t('common.close', { defaultValue: 'Close' })}
-        </button>
+        <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>{s.bgAlpha}</span>
       </div>
     </div>
   );

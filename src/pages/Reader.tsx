@@ -11,7 +11,6 @@ import '../styles/reader-animations.css';
 import { useReaderNav } from '../hooks/useReaderNav';
 import ContextMenu, { type ContextMenuState } from '../components/reader/ContextMenu';
 import NavSettingsPopover from '../components/reader/NavSettingsPopover';
-import SettingsPanel from '../components/reader/SettingsPanel';
 import ShortcutsHelpModal from '../components/reader/ShortcutsHelpModal';
 import BookmarkButton from '../components/reader/BookmarkButton';
 import FullBookSearchPanel from '../components/reader/FullBookSearchPanel';
@@ -1611,38 +1610,6 @@ export default function Reader() {
           </div>
         </div>
 
-        <SettingsPanel
-          open={showSettings}
-          isMobileUi={isMobileUi}
-          baseBg={tStyleBase.bg}
-          border={tStyle.border}
-          text={tStyle.text}
-          fontSize={fontSize}
-          setFontSize={setFontSize}
-          fontFamily={fontFamily}
-          setFontFamily={setFontFamily}
-          lineHeight={lineHeight}
-          setLineHeight={setLineHeight}
-          paragraphSpacing={paragraphSpacing}
-          setParagraphSpacing={setParagraphSpacing}
-          theme={theme}
-          setTheme={setTheme}
-          pageAnim={pageAnim}
-          updatePageAnim={updatePageAnim}
-          ttsRate={ttsRate}
-          setTtsRate={setTtsRate}
-          bgAlpha={bgAlpha}
-          setBgAlpha={setBgAlpha}
-          tipHeaderLeft={tipHeaderLeft}
-          setTipHeaderLeft={setTipHeaderLeft}
-          tipHeaderRight={tipHeaderRight}
-          setTipHeaderRight={setTipHeaderRight}
-          tipFooterLeft={tipFooterLeft}
-          setTipFooterLeft={setTipFooterLeft}
-          tipFooterRight={tipFooterRight}
-          setTipFooterRight={setTipFooterRight}
-          onClose={() => setShowSettings(false)}
-        />
 
       </div>
 
