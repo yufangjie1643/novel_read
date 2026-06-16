@@ -1,4 +1,5 @@
 pub mod book_source;
+pub mod chinese_utils;
 pub mod commands;
 pub mod content_processor;
 pub mod controllers;
