@@ -113,7 +113,7 @@
     "loadContentFailed": "Failed to load content: {{error}}",
     "loadContentFailedWithSource": "Source « {{source}} » failed to load chapter content. The book's chapter_content rule is broken. See the Sources page for last error details. (raw: {{error}})",
     "ttsNotSupported": "TTS not supported in this browser",
-    "chapters": "← Chapters",
+    "chapters": "Chapters",
     "chapterTitle": "Chapter {{idx}}",
     "tts": "TTS",
     "fontSize": "Font: ",

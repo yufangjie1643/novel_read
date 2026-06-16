@@ -113,7 +113,7 @@
     "loadContentFailed": "加载内容失败：{{error}}",
     "loadContentFailedWithSource": "书源 « {{source}} » 加载章节失败。该书源的章节正文规则有问题。请到书源管理页面查看最近错误详情。（原始错误：{{error}}）",
     "ttsNotSupported": "浏览器不支持语音朗读",
-    "chapters": "← 目录",
+    "chapters": "目录",
     "chapterTitle": "第 {{idx}} 章",
     "tts": "朗读",
     "fontSize": "字体大小：",

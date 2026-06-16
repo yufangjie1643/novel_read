@@ -1472,6 +1472,15 @@ export default function Reader() {
             style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0, flexShrink: 0 }}
           >
             <button
+              onClick={() => navigate(readerParentPath.current)}
+              title={t('common.back')}
+              aria-label={t('common.back')}
+              data-testid="reader-back-btn"
+              style={btnStyle()}
+            >
+              ←
+            </button>
+            <button
               onClick={() =>
                 isMobileUi
                   ? openReaderPanel('catalog')
