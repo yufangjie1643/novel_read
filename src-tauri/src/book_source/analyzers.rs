@@ -102,7 +102,6 @@ impl HtmlAnalyzer {
     /// then normalized so `&nbsp;` becomes a regular space and runs
     /// of 3+ spaces are capped at 2 (matching 2em indent).
     pub fn get_text_with_breaks(&self, selector_str: &str) -> Option<String> {
-        use scraper::Node;
         let selector = Selector::parse(selector_str).ok()?;
         let element = self.document.select(&selector).next()?;
         let mut out = String::new();

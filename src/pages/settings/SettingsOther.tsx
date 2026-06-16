@@ -16,6 +16,46 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
   const { sectionStyle, sectionTitle, rowStyle, labelStyle } = useSettingsStyles();
   const { serverRunning, serverUrl, serverMessage, toggling, toggleServer } = useServerControl();
 
+  // Cloud progress sync state
+  const [syncUrl, setSyncUrl] = useState(localStorage.getItem("webdav_url") || "");
+  const [syncUser, setSyncUser] = useState(localStorage.getItem("webdav_user") || "");
+  const [syncPass, setSyncPass] = useState(localStorage.getItem("webdav_pass") || "");
+  const [syncResult, setSyncResult] = useState("");
+  const [syncing, setSyncing] = useState(false);
+
+  async function runCloudSync() {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncResult("");
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const res = await invoke("get_books") as { data?: Array<{ book_url: string }> };
+      const urls = (res.data || []).map((b) => b.book_url);
+      let uploaded = 0, downloaded = 0, skipped = 0, failed = 0;
+      for (const u of urls) {
+        try {
+          const r = await invoke("sync_book_progress", {
+            bookUrl: u,
+            direction: "auto",
+            webdavUrl: syncUrl,
+            webdavUser: syncUser || null,
+            webdavPass: syncPass || null,
+          });
+          if (((r as { status?: string }).status) === "uploaded") uploaded++;
+          else if (((r as { status?: string }).status) === "downloaded") downloaded++;
+          else if (((r as { status?: string }).status) === "skipped") skipped++;
+          else failed++;
+        } catch { failed++; }
+      }
+      const summary = "up:" + uploaded + " down:" + downloaded + " skip:" + skipped + " fail:" + failed + " of " + urls.length;
+      setSyncResult(t("settings.syncResult", { result: summary }));
+    } catch (e) {
+      setSyncResult(String(e));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   function toggleLang() {
     const next = i18n.language.startsWith('zh') ? 'en' : 'zh';
     i18n.changeLanguage(next);
@@ -28,6 +68,55 @@ export default function SettingsOther({ mode }: SettingsOtherProps = {}) {
 
   return (
     <>
+      {(!mode || mode === 'other') && (
+        <div style={sectionStyle}>
+          <div style={sectionTitle}>{t('settings.syncTitle')}</div>
+          <div style={rowStyle}>
+            <span style={labelStyle}>{t('settings.syncUrl')}</span>
+            <input
+              value={syncUrl}
+              onChange={(e) => { setSyncUrl(e.target.value); localStorage.setItem("webdav_url", e.target.value); }}
+              placeholder="https://dav.example.com/remote.php/webdav/"
+              style={{ flex: 1, minWidth: 200, padding: "6px 10px", border: "1px solid #ddd", borderRadius: 6 }}
+            />
+          </div>
+          <div style={rowStyle}>
+            <span style={labelStyle}>{t('settings.syncUser')}</span>
+            <input
+              value={syncUser}
+              onChange={(e) => { setSyncUser(e.target.value); localStorage.setItem("webdav_user", e.target.value); }}
+              style={{ flex: 1, minWidth: 200, padding: "6px 10px", border: "1px solid #ddd", borderRadius: 6 }}
+            />
+          </div>
+          <div style={rowStyle}>
+            <span style={labelStyle}>{t('settings.syncPass')}</span>
+            <input
+              type="password"
+              value={syncPass}
+              onChange={(e) => { setSyncPass(e.target.value); localStorage.setItem("webdav_pass", e.target.value); }}
+              style={{ flex: 1, minWidth: 200, padding: "6px 10px", border: "1px solid #ddd", borderRadius: 6 }}
+            />
+          </div>
+          <div style={rowStyle}>
+            <span style={labelStyle}>{t('settings.syncNow')}</span>
+            <button
+              type="button"
+              onClick={runCloudSync}
+              disabled={syncing || !syncUrl}
+              style={btnStyle}
+            >
+              {syncing ? "..." : t('settings.syncNow')}
+            </button>
+          </div>
+          {syncResult && (
+            <div style={{ ...rowStyle, fontSize: 13, opacity: 0.85 }}>
+              <span style={labelStyle}></span>
+              <span>{syncResult}</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {(!mode || mode === 'other') && (
         <div style={sectionStyle}>
           <div style={sectionTitle}>{t('settings.language')}</div>

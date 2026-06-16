@@ -2,7 +2,7 @@ use crate::book_source::{
     analyze_url::AnalyzeUrl,
     fullbook_search::{run_fullbook_search, FullBookSearchEvent},
     js_extensions::JsExtState,
-    search_streamer::{run_stream_real, SearchEvent, SearchSink},
+    search_streamer::{SearchEvent, SearchSink},
     source_loader::{load_source_from_url, parse_source_json},
     web_book::WebBook,
 };

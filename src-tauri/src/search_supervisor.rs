@@ -160,7 +160,7 @@ pub struct SearchSupervisor {
     /// App handle, kept for future use (e.g. emitting events from the
     /// resource monitor). `None` in tests where constructing a real
     /// AppHandle is impractical.
-    pub(crate) app_handle: Option<tauri::AppHandle>,
+    _app_handle: Option<tauri::AppHandle>,
 }
 
 impl SearchSupervisor {
@@ -177,7 +177,7 @@ impl SearchSupervisor {
             settings: Arc::new(RwLock::new(defaults)),
             current_request: Arc::new(tokio::sync::Mutex::new(None)),
             monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
-            app_handle: Some(app_handle),
+            _app_handle: Some(app_handle),
         }
     }
 
@@ -323,7 +323,7 @@ impl SearchSupervisor {
             settings: Arc::new(RwLock::new(defaults)),
             current_request: Arc::new(tokio::sync::Mutex::new(None)),
             monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
-            app_handle: None,
+            _app_handle: None,
         }
     }
 }
