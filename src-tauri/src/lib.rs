@@ -1,5 +1,8 @@
 pub mod book_source;
+pub mod chinese_utils;
 pub mod commands;
+pub mod content_processor;
+pub mod controllers;
 #[allow(invalid_reference_casting)]
 pub mod db;
 pub mod http;

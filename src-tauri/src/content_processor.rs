@@ -1,7 +1,7 @@
 use regex::Regex;
 use std::collections::HashSet;
 
-use crate::db::models::ReplaceRule;
+use crate::db::models::{ReplaceRule, RuleMatchMeta};
 
 /// Result of processing chapter content.
 #[derive(Debug, Clone)]
@@ -125,6 +125,78 @@ pub fn process_content(
     }
 }
 
+/// Apply a single replace rule and return match metadata.
+/// `first_match_range` is a UTF-8 byte offset range, matching
+/// `HTMLTextAreaElement.selectionStart/End`.
+pub fn apply_single_rule(text: &str, rule: &ReplaceRule) -> RuleMatchMeta {
+    let pattern = rule.pattern.as_deref().unwrap_or("");
+    if pattern.is_empty() {
+        return RuleMatchMeta {
+            matched: false,
+            match_count: 0,
+            result: text.to_string(),
+            first_match_range: None,
+            error: None,
+        };
+    }
+    let replacement = rule.replacement.as_deref().unwrap_or("");
+
+    if rule.is_regex {
+        let re = match Regex::new(pattern) {
+            Ok(re) => re,
+            Err(e) => {
+                return RuleMatchMeta {
+                    matched: false,
+                    match_count: 0,
+                    result: text.to_string(),
+                    first_match_range: None,
+                    error: Some(format!("正则编译失败: {e}")),
+                };
+            }
+        };
+
+        let mut count = 0usize;
+        let mut first: Option<(usize, usize)> = None;
+        for m in re.find_iter(text) {
+            if first.is_none() {
+                first = Some((m.start(), m.end()));
+            }
+            count += 1;
+        }
+        let result = re.replace_all(text, replacement).to_string();
+        RuleMatchMeta {
+            matched: count > 0,
+            match_count: count,
+            result,
+            first_match_range: first,
+            error: None,
+        }
+    } else {
+        let mut count = 0usize;
+        let mut first: Option<(usize, usize)> = None;
+        let mut cursor = 0usize;
+        while let Some(pos) = text[cursor..].find(pattern) {
+            let abs = cursor + pos;
+            if first.is_none() {
+                first = Some((abs, abs + pattern.len()));
+            }
+            count += 1;
+            cursor = abs + pattern.len();
+            if pattern.is_empty() {
+                break;
+            }
+        }
+        let result = text.replace(pattern, replacement);
+        RuleMatchMeta {
+            matched: count > 0,
+            match_count: count,
+            result,
+            first_match_range: first,
+            error: None,
+        }
+    }
+}
+
 /// Apply replace rules to a title string.
 fn apply_replace_rules(text: &str, rules: &[ReplaceRule], use_replace: bool) -> String {
     if !use_replace || rules.is_empty() {
@@ -169,8 +241,8 @@ fn try_remove_duplicate_title(book_name: &str, title: &str, content: &str) -> Op
 // ============== Re-segmentation (simplified from ContentHelp.kt) ==============
 
 const MARK_SENTENCES_END: &str = "？。！?!~";
-const MARK_QUOTATION: &str = "\"""";
-const MARK_QUOTATION_RIGHT: &str = "\"""";
+const MARK_QUOTATION: &str = "\"";
+const MARK_QUOTATION_RIGHT: &str = "\"";
 const WORD_MAX_LENGTH: usize = 16;
 
 fn is_sentence_end(c: char) -> bool {

@@ -15,11 +15,11 @@ pub mod source_stats_dao;
 
 pub use dao::{
     BookChapterDao, BookDao, BookGroupDao, BookProgressDao, BookSourceDao, BookmarkDao, CacheDao,
-    ChapterContentDao, CookieDao, DictRuleDao, HttpTTSDao, KeyboardAssistDao, ReadRecordDao,
-    ReplaceRuleDao, RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao, RuleSubDao,
-    SearchKeywordDao, ServerDao, TxtTocRuleDao,
+    ChapterContentDao, CookieDao, DictRuleDao, HttpServerAuthDao, HttpTTSDao, KeyboardAssistDao,
+    ReadRecordDao, ReplaceRuleDao, RssArticleDao, RssReadRecordDao, RssSourceDao, RssStarDao,
+    RuleSubDao, SearchKeywordDao, ServerDao, TxtTocRuleDao,
 };
-pub use models::{BookSource, BookSourceSummary, RssSource, RuleSub};
+pub use models::{Book, BookChapter, BookGroup, BookProgress, BookSource, BookSourceSummary, HttpServerAuth, HttpServerAuthView, RssSource, RuleSub, RuleMatchMeta};
 pub use source_stats_dao::{compute_health, HealthInputs, OpKind, SourceStats, SourceStatsDao};
 
 /// Pool size used for the shared `deadpool-sqlite` connection pool.
