@@ -1,5 +1,5 @@
 use super::models::{
-    Book, BookChapter, BookGroup, BookProgressSync, BookSource, Bookmark, DictRule, ExploreItem,
+    Book, BookChapter, BookGroup, BookProgress, BookSource, Bookmark, DictRule, ExploreItem,
     ExploreItemsPage, HttpTTS, KeyboardAssist, ReadRecord, ReplaceRule, RssArticle,
     RssReadRecord, RssSource, RssStar, RuleSub, SearchKeyword, Server, TxtTocRule,
 };
@@ -2119,6 +2119,9 @@ impl<'a> ChapterContentDao<'a> {
 // BookProgressDao
 // ============================================================================
 
+/// Lightweight DAO for `book_progress_sync`. Owns both the progress-write
+/// optimization (4 columns, no books-table touch) and the full sync-metadata
+/// upsert used by the controller layer.
 pub struct BookProgressDao<'a> {
     conn: &'a Connection,
 }
@@ -2128,44 +2131,104 @@ impl<'a> BookProgressDao<'a> {
         Self { conn }
     }
 
-    pub fn get(&self, book_url: &str) -> Result<Option<BookProgressSync>> {
+    pub fn get(&self, book_url: &str) -> Result<Option<BookProgress>> {
         let mut stmt = self.conn.prepare(
-            "SELECT bookUrl, lastLocalTime, lastRemoteTime, lastSyncedAt, remoteEtag
+            "SELECT bookUrl, durChapterIndex, durChapterPos, durChapterTime,
+                    durChapterTitle, lastLocalTime, lastRemoteTime,
+                    lastSyncedAt, remoteEtag
              FROM book_progress_sync WHERE bookUrl = ?1",
         )?;
         let mut rows = stmt.query(params![book_url])?;
         if let Some(row) = rows.next()? {
-            Ok(Some(BookProgressSync {
+            Ok(Some(BookProgress {
                 book_url: row.get(0)?,
-                last_local_time: row.get(1)?,
-                last_remote_time: row.get(2)?,
-                last_synced_at: row.get(3)?,
-                remote_etag: row.get(4).ok(),
+                dur_chapter_index: row.get(1)?,
+                dur_chapter_pos: row.get(2)?,
+                dur_chapter_time: row.get(3)?,
+                dur_chapter_title: row.get(4).ok(),
+                last_local_time: row.get(5)?,
+                last_remote_time: row.get(6)?,
+                last_synced_at: row.get(7)?,
+                remote_etag: row.get(8).ok(),
             }))
         } else {
             Ok(None)
         }
     }
 
-    pub fn upsert(&self, item: &BookProgressSync) -> Result<()> {
+    /// Full upsert — replaces every column of the row identified by
+    /// `book_url`. Used by the controller after a successful upload or
+    /// download, where sync metadata has just been written.
+    pub fn upsert(&self, p: &BookProgress) -> Result<()> {
         self.conn.execute(
             r#"INSERT INTO book_progress_sync
-                 (bookUrl, lastLocalTime, lastRemoteTime, lastSyncedAt, remoteEtag)
-               VALUES (?1, ?2, ?3, ?4, ?5)
+                 (bookUrl, durChapterIndex, durChapterPos, durChapterTime,
+                  durChapterTitle, lastLocalTime, lastRemoteTime,
+                  lastSyncedAt, remoteEtag)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                ON CONFLICT(bookUrl) DO UPDATE SET
-                 lastLocalTime = excluded.lastLocalTime,
-                 lastRemoteTime = excluded.lastRemoteTime,
-                 lastSyncedAt = excluded.lastSyncedAt,
-                 remoteEtag = excluded.remoteEtag"#,
+                 durChapterIndex = excluded.durChapterIndex,
+                 durChapterPos   = excluded.durChapterPos,
+                 durChapterTime  = excluded.durChapterTime,
+                 durChapterTitle = excluded.durChapterTitle,
+                 lastLocalTime   = excluded.lastLocalTime,
+                 lastRemoteTime  = excluded.lastRemoteTime,
+                 lastSyncedAt    = excluded.lastSyncedAt,
+                 remoteEtag      = excluded.remoteEtag"#,
             params![
-                item.book_url,
-                item.last_local_time,
-                item.last_remote_time,
-                item.last_synced_at,
-                item.remote_etag
+                p.book_url,
+                p.dur_chapter_index,
+                p.dur_chapter_pos,
+                p.dur_chapter_time,
+                p.dur_chapter_title,
+                p.last_local_time,
+                p.last_remote_time,
+                p.last_synced_at,
+                p.remote_etag
             ],
         )?;
         Ok(())
+    }
+
+    /// Lightweight write — only the four progress columns. Returns false if
+    /// no row exists yet (caller falls back to ensure_row).
+    pub fn save_progress_only(
+        &self,
+        book_url: &str,
+        index: i32,
+        pos: i32,
+        time: i64,
+        title: Option<&str>,
+    ) -> Result<bool> {
+        let affected = self.conn.execute(
+            r#"UPDATE book_progress_sync
+               SET durChapterIndex = ?2, durChapterPos = ?3,
+                   durChapterTime  = ?4, durChapterTitle = ?5
+               WHERE bookUrl = ?1"#,
+            params![book_url, index, pos, time, title],
+        )?;
+        Ok(affected > 0)
+    }
+
+    /// Initialize a row from a Book if one doesn't yet exist. Returns the
+    /// row (existing or freshly inserted) so callers can keep going.
+    pub fn ensure_row(&self, book: &Book) -> Result<BookProgress> {
+        if let Some(existing) = self.get(&book.book_url)? {
+            return Ok(existing);
+        }
+        let fresh = BookProgress {
+            book_url: book.book_url.clone(),
+            dur_chapter_index: book.dur_chapter_index,
+            dur_chapter_pos: book.dur_chapter_pos,
+            dur_chapter_time: book.dur_chapter_time,
+            dur_chapter_title: book.dur_chapter_title.clone(),
+            last_local_time: 0,
+            last_remote_time: 0,
+            last_synced_at: 0,
+            remote_etag: None,
+        };
+        self.upsert(&fresh)?;
+        Ok(fresh)
     }
 
     pub fn delete(&self, book_url: &str) -> Result<()> {
@@ -2188,17 +2251,25 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE book_progress_sync (
                 bookUrl TEXT PRIMARY KEY,
-                lastLocalTime INTEGER NOT NULL,
-                lastRemoteTime INTEGER NOT NULL,
-                lastSyncedAt INTEGER NOT NULL,
+                durChapterIndex INTEGER NOT NULL DEFAULT 0,
+                durChapterPos INTEGER NOT NULL DEFAULT 0,
+                durChapterTime INTEGER NOT NULL DEFAULT 0,
+                durChapterTitle TEXT,
+                lastLocalTime INTEGER NOT NULL DEFAULT 0,
+                lastRemoteTime INTEGER NOT NULL DEFAULT 0,
+                lastSyncedAt INTEGER NOT NULL DEFAULT 0,
                 remoteEtag TEXT
             )",
         )
         .unwrap();
 
         let dao = BookProgressDao::new(&conn);
-        let item = BookProgressSync {
+        let item = BookProgress {
             book_url: "b1".to_string(),
+            dur_chapter_index: 0,
+            dur_chapter_pos: 0,
+            dur_chapter_time: 0,
+            dur_chapter_title: None,
             last_local_time: 100,
             last_remote_time: 200,
             last_synced_at: 300,
@@ -2210,13 +2281,24 @@ mod tests {
         assert_eq!(got.remote_etag.as_deref(), Some("etag1"));
 
         // upsert overwrites
-        let updated = BookProgressSync {
+        let updated = BookProgress {
             last_local_time: 150,
             ..item.clone()
         };
         dao.upsert(&updated).unwrap();
         let got = dao.get("b1").unwrap().unwrap();
         assert_eq!(got.last_local_time, 150);
+
+        // save_progress_only
+        assert!(dao
+            .save_progress_only("b1", 5, 100, 999, Some("ch5"))
+            .unwrap());
+        let got = dao.get("b1").unwrap().unwrap();
+        assert_eq!(got.dur_chapter_index, 5);
+        assert_eq!(got.last_local_time, 150); // sync metadata untouched
+
+        // save_progress_only returns false on missing row
+        assert!(!dao.save_progress_only("missing", 0, 0, 0, None).unwrap());
 
         // delete
         dao.delete("b1").unwrap();
