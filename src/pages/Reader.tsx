@@ -1834,7 +1834,7 @@ export default function Reader() {
         ref={contentRef}
         className="reader-content"
         onClick={(e) => {
-          if (!isMobileUi && !loading && !message) {
+          if (isMobileUi && !loading && !message) {
             const rect = (e.currentTarget as HTMLDivElement).getBoundingClientRect();
             const x = e.clientX - rect.left;
             const width = rect.width;
