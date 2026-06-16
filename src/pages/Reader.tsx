@@ -1444,7 +1444,7 @@ export default function Reader() {
           left: 0,
           right: 0,
           zIndex: 50,
-          background: tStyle.bg,
+          background: tStyleBase.bg,
           transform: headerVisible ? 'translateY(0)' : 'translateY(-100%)',
           transition: 'transform 0.25s ease',
           boxShadow: headerVisible
@@ -1641,6 +1641,7 @@ export default function Reader() {
         {showSettings && !isMobileUi && (
           <div
             style={{
+              background: tStyleBase.bg,
               borderBottom: `1px solid ${tStyle.border}`,
               padding: isMobileUi ? '10px 12px' : '10px 20px',
               display: 'grid',
