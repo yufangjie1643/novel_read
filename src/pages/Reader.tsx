@@ -1671,25 +1671,31 @@ export default function Reader() {
         )}
       </div>
 
-      {/* Progress bar */}
+      {/* Reading progress bar - vertical, right edge */}
       {!loading && !message && showReadProgress && (
         <div
+          aria-hidden
           style={{
             position: 'fixed',
             top: 0,
-            left: 0,
             right: 0,
-            height: 2,
+            bottom: 0,
+            width: 4,
             zIndex: 55,
-            background: 'transparent',
+            background: 'rgba(128, 128, 128, 0.18)',
+            pointerEvents: 'none',
           }}
         >
           <div
             style={{
-              height: '100%',
-              width: `${chapterProgressPercent}%`,
-              background: '#1976d2',
-              transition: 'width 0.3s ease',
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              height: `${tipScrollPct}%`,
+              background: theme === 'night' ? '#82b1ff' : '#1976d2',
+              opacity: 0.85,
+              transition: 'height 0.3s ease',
             }}
           />
         </div>
