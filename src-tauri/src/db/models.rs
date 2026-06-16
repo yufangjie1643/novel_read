@@ -597,16 +597,45 @@ pub struct RssReadRecord {
 }
 
 // ============================================================================
-// BookProgressSync
+// BookProgress (unified — progress + sync metadata)
 // ============================================================================
+//
+// One row per book in `book_progress_sync`. Holds:
+//   - The four reading-progress columns (durChapterIndex/Pos/Time/Title) so
+//     the reader's chapter-flip write can skip the heavy books-table path.
+//   - The sync-state fields (lastLocalTime, lastRemoteTime, lastSyncedAt,
+//     remoteEtag) so a single round-trip suffices for both save and sync.
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BookProgressSync {
+#[serde(default)]
+pub struct BookProgress {
     pub book_url: String,
+    // Progress (mirrors books.durChapter*)
+    pub dur_chapter_index: i32,
+    pub dur_chapter_pos: i32,
+    pub dur_chapter_time: i64,
+    pub dur_chapter_title: Option<String>,
+    // Sync metadata
     pub last_local_time: i64,
     pub last_remote_time: i64,
     pub last_synced_at: i64,
     pub remote_etag: Option<String>,
+}
+
+impl Default for BookProgress {
+    fn default() -> Self {
+        Self {
+            book_url: String::new(),
+            dur_chapter_index: 0,
+            dur_chapter_pos: 0,
+            dur_chapter_time: 0,
+            dur_chapter_title: None,
+            last_local_time: 0,
+            last_remote_time: 0,
+            last_synced_at: 0,
+            remote_etag: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
