@@ -361,6 +361,12 @@ CREATE INDEX IF NOT EXISTS idx_source_stats_health ON source_stats(health_score 
 pub const CREATE_BOOK_PROGRESS_SYNC_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS book_progress_sync (
     bookUrl TEXT PRIMARY KEY,
+    -- Reading progress (mirrors books.durChapter*)
+    durChapterIndex INTEGER NOT NULL DEFAULT 0,
+    durChapterPos INTEGER NOT NULL DEFAULT 0,
+    durChapterTime INTEGER NOT NULL DEFAULT 0,
+    durChapterTitle TEXT,
+    -- Sync metadata
     lastLocalTime INTEGER NOT NULL DEFAULT 0,
     lastRemoteTime INTEGER NOT NULL DEFAULT 0,
     lastSyncedAt INTEGER NOT NULL DEFAULT 0,
