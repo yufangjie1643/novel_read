@@ -6,6 +6,7 @@ import ExploreShow from './pages/ExploreShow';
 import Home from './pages/Home';
 import BookDetail from './pages/BookDetail';
 import Reader from './pages/Reader';
+import ChapterCatalog from './pages/ChapterCatalog';
 import DebugPage from './pages/DebugPage';
 import RssPage from './pages/RssPage';
 import ReplaceRules from './pages/ReplaceRules';
@@ -48,6 +49,7 @@ function App() {
           <Route path="/about" element={<About />} />
           <Route path="/book/:bookUrl" element={<BookDetail />} />
           <Route path="/reader/:bookUrl/:chapterIndex" element={<Reader />} />
+          <Route path="/reader/:bookUrl/:chapterIndex/catalog" element={<ChapterCatalog />} />
         </Routes>
       </Layout>
     </BrowserRouter>

@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next';
 import type { ApiResponse, Book, BookChapter, BookSource, ReplaceRule } from '../types';
 import { useUiMode } from '../uiMode';
 import ChapterSlider from '../components/reader/ChapterSlider';
-import CatalogPanel from '../components/reader/CatalogPanel';
 import TTSOverlay from '../components/reader/TTSOverlay';
 import TipValue, { readTipKind, TipKind } from '../components/reader/TipValue';
 import '../styles/reader-animations.css';
@@ -1481,11 +1480,7 @@ export default function Reader() {
               ←
             </button>
             <button
-              onClick={() =>
-                isMobileUi
-                  ? openReaderPanel('catalog')
-                  : setReaderPanel(readerPanel === 'catalog' ? null : 'catalog')
-              }
+              onClick={() => navigate(`/reader/${encodeURIComponent(decodedUrl)}/${idx}/catalog`)}
               style={btnStyle()}
             >
               {t('reader.chapters')}
@@ -1649,35 +1644,6 @@ export default function Reader() {
           onClose={() => setShowSettings(false)}
         />
 
-        {/* Desktop catalog popover — opened by the top-bar "Chapters" button.
-            Anchored under the top bar; closes on chapter pick or on
-            toggling the top-bar "Chapters" button again. Mobile uses the
-            bottom-sheet catalog panel instead. */}
-        {!isMobileUi && readerPanel === 'catalog' && headerVisible && (
-          <div
-            style={{
-              borderBottom: `1px solid ${tStyle.border}`,
-              background: tStyle.bg,
-              padding: '12px 20px 16px',
-              boxShadow: `0 4px 16px ${theme === 'night' ? 'rgba(0,0,0,0.45)' : 'rgba(0,0,0,0.08)'}`,
-              maxHeight: '60vh',
-              overflow: 'hidden',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-            }}
-          >
-            <span style={mobilePanelTitleStyle}>{t('reader.readerPanelCatalog')}</span>
-            <CatalogPanel
-              chapters={chapters}
-              currentIndex={idx}
-              onPick={(newIdx) => {
-                setReaderPanel(null);
-                goToChapter(newIdx);
-              }}
-            />
-          </div>
-        )}
       </div>
 
       {/* Reading progress bar - vertical, right edge */}
@@ -2326,26 +2292,6 @@ export default function Reader() {
               </div>
             )}
 
-            {readerPanel === 'catalog' && (
-              <div
-                style={{
-                  display: 'grid',
-                  gap: 8,
-                  marginBottom: 12,
-                }}
-              >
-                <span style={mobilePanelTitleStyle}>{t('reader.readerPanelCatalog')}</span>
-                <CatalogPanel
-                  chapters={chapters}
-                  currentIndex={idx}
-                  onPick={(newIdx) => {
-                    setReaderPanel(null);
-                    goToChapter(newIdx);
-                  }}
-                />
-              </div>
-            )}
-
             {readerPanel === 'style' && (
               <div
                 style={{
@@ -2685,7 +2631,7 @@ export default function Reader() {
             >
               <button
                 type="button"
-                onClick={() => openReaderPanel('catalog')}
+                onClick={() => navigate(`/reader/${encodeURIComponent(decodedUrl)}/${idx}/catalog`)}
                 style={mobileMenuButtonStyle(readerPanel === 'catalog')}
               >
                 <span style={{ fontSize: 18 }}>☰</span>
