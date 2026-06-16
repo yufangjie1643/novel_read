@@ -1,5 +1,6 @@
 pub mod book_source;
 pub mod commands;
+pub mod content_processor;
 pub mod controllers;
 #[allow(invalid_reference_casting)]
 pub mod db;

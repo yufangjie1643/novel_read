@@ -294,6 +294,32 @@ impl Default for ReplaceRule {
     }
 }
 
+/// Match metadata returned by `apply_single_rule`.
+/// `first_match_range` is a UTF-8 byte offset range, matching what
+/// `HTMLTextAreaElement.selectionStart/End` expects so the frontend can
+/// highlight the first match in-place.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RuleMatchMeta {
+    pub matched: bool,
+    pub match_count: usize,
+    pub result: String,
+    pub first_match_range: Option<(usize, usize)>,
+    pub error: Option<String>,
+}
+
+impl Default for RuleMatchMeta {
+    fn default() -> Self {
+        Self {
+            matched: false,
+            match_count: 0,
+            result: String::new(),
+            first_match_range: None,
+            error: None,
+        }
+    }
+}
+
 // ============================================================================
 // SearchBook
 // ============================================================================
@@ -571,6 +597,31 @@ pub struct Server {
     pub name: Option<String>,
     pub url: Option<String>,
     pub enabled: bool,
+}
+
+/// Single-row credential table for the built-in HTTP server.
+/// `password_hash` is the argon2 PHC string — never expose to the frontend.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HttpServerAuth {
+    pub username: String,
+    pub password_hash: String,
+    pub updated_at: i64,
+}
+
+/// Sanitized credential view sent to the frontend (no password hash).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HttpServerAuthView {
+    pub username: String,
+    pub updated_at: i64,
+}
+
+impl From<&HttpServerAuth> for HttpServerAuthView {
+    fn from(v: &HttpServerAuth) -> Self {
+        Self {
+            username: v.username.clone(),
+            updated_at: v.updated_at,
+        }
+    }
 }
 
 // ============================================================================

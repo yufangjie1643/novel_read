@@ -287,6 +287,15 @@ CREATE TABLE IF NOT EXISTS servers (
 );
 "#;
 
+pub const CREATE_HTTP_SERVER_AUTH_TABLE: &str = r#"
+CREATE TABLE IF NOT EXISTS http_server_auth (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    username TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+"#;
+
 pub const CREATE_RSS_STARS_TABLE: &str = r#"
 CREATE TABLE IF NOT EXISTS rss_stars (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -408,6 +417,7 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
     );
     conn.execute_batch(CREATE_KEYBOARD_ASSISTS_TABLE)?;
     conn.execute_batch(CREATE_SERVERS_TABLE)?;
+    conn.execute_batch(CREATE_HTTP_SERVER_AUTH_TABLE)?;
     conn.execute_batch(CREATE_RSS_STARS_TABLE)?;
     conn.execute_batch(CREATE_RSS_READ_RECORDS_TABLE)?;
     conn.execute_batch(CREATE_CHAPTER_CONTENTS_TABLE)?;

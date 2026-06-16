@@ -15,7 +15,7 @@ use crate::db::{
         RuleSubDao, SearchKeywordDao, ServerDao, TxtTocRuleDao,
     },
     models::{
-        Book, BookChapter, BookGroup, BookProgressSnapshot, BookProgressSync, BookSource,
+        Book, BookChapter, BookGroup, BookProgress, BookProgressSnapshot, BookSource,
         BookSourceSummary, Bookmark, DictRule, ExploreItemsPage, ExploreKind, HttpTTS,
         KeyboardAssist, ReadRecord, ReplaceRule, RssArticle, RssReadRecord, RssSource, RssStar,
         RuleSub, SearchBook, SearchKeyword, Server, SourceLink, SyncBookProgressResult,
@@ -4191,7 +4191,7 @@ pub async fn sync_book_progress(
 pub async fn get_book_sync_status(
     app_handle: tauri::AppHandle,
     book_url: String,
-) -> Result<ApiResponse<Option<BookProgressSync>>, String> {
+) -> Result<ApiResponse<Option<BookProgress>>, String> {
     let resp = db_op(app_handle, move |c| {
         BookProgressDao::new(c).get(&book_url)
     })
@@ -4298,8 +4298,12 @@ async fn upsert_book_progress_sync(
     remote_time: i64,
     now: i64,
 ) -> Result<(), String> {
-    let item = BookProgressSync {
+    let item = BookProgress {
         book_url: book_url.to_string(),
+        dur_chapter_index: 0,
+        dur_chapter_pos: 0,
+        dur_chapter_time: 0,
+        dur_chapter_title: None,
         last_local_time: local_time,
         last_remote_time: remote_time,
         last_synced_at: now,
