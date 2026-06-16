@@ -8,11 +8,11 @@ import ChapterSlider from '../components/reader/ChapterSlider';
 import CatalogPanel from '../components/reader/CatalogPanel';
 import TTSOverlay from '../components/reader/TTSOverlay';
 import TipValue, { readTipKind, TipKind } from '../components/reader/TipValue';
-import TipSettingsSection from '../components/reader/TipSettingsSection';
 import '../styles/reader-animations.css';
 import { useReaderNav } from '../hooks/useReaderNav';
 import ContextMenu, { type ContextMenuState } from '../components/reader/ContextMenu';
 import NavSettingsPopover from '../components/reader/NavSettingsPopover';
+import SettingsPanel from '../components/reader/SettingsPanel';
 import ShortcutsHelpModal from '../components/reader/ShortcutsHelpModal';
 import BookmarkButton from '../components/reader/BookmarkButton';
 import FullBookSearchPanel from '../components/reader/FullBookSearchPanel';
@@ -182,7 +182,7 @@ export default function Reader() {
   const [textAlign, setTextAlign] = useState(() => {
     return localStorage.getItem('reader_text_align') || 'justify';
   });
-  const [contentWidth, setContentWidth] = useState(() => {
+  const [contentWidth, _setContentWidth] = useState(() => {
     return parseInt(localStorage.getItem('reader_content_width') || '760', 10);
   });
   /// Background opacity 0-100. 100 = solid theme bg; 0 = transparent
@@ -1637,248 +1637,38 @@ export default function Reader() {
           </div>
         </div>
 
-        {/* Settings panel */}
-        {showSettings && !isMobileUi && (
-          <div
-            style={{
-              background: tStyleBase.bg,
-              borderBottom: `1px solid ${tStyle.border}`,
-              padding: isMobileUi ? '10px 12px' : '10px 20px',
-              display: 'grid',
-              gridTemplateColumns: isMobileUi ? '1fr 1fr' : 'repeat(auto-fit, minmax(180px, 1fr))',
-              gap: isMobileUi ? '10px 12px' : '12px 16px',
-              alignItems: 'center',
-            }}
-          >
-            {/* Page animation mode */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>翻页：</span>
-              {[
-                { key: 'cover', label: t('reader.pageAnimCover') },
-                { key: 'slide', label: t('reader.pageAnimSlide') },
-                { key: 'simulation', label: t('reader.pageAnimSimulation') },
-                { key: 'scroll', label: t('reader.pageAnimScroll') },
-                { key: 'none', label: t('reader.pageAnimNone') },
-              ].map((item) => (
-                <button
-                  key={item.key}
-                  onClick={() => updatePageAnim(item.key as PageAnim)}
-                  style={pageAnim === item.key ? btnStyle(true) : btnStyle()}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-            {/* Font size slider */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.fontSize')}
-              </span>
-              <input
-                type="range"
-                min={12}
-                max={32}
-                step={1}
-                value={fontSize}
-                onChange={(e) => {
-                  const s = parseInt(e.target.value, 10);
-                  setFontSize(s);
-                  localStorage.setItem('reader_font_size', String(s));
-                }}
-                style={{ verticalAlign: 'middle', width: 80 }}
-              />
-              <span style={{ fontSize: 13, fontWeight: 600, minWidth: 30, textAlign: 'center' }}>
-                {fontSize}px
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.theme')}
-              </span>
-              {THEME_CYCLE.map((tName) => (
-                <button
-                  key={tName}
-                  onClick={() => {
-                    setTheme(tName);
-                    localStorage.setItem('reader_theme', tName);
-                  }}
-                  style={theme === tName ? btnStyle(true) : btnStyle()}
-                >
-                  {t(`reader.themeCycle.${tName}`)}
-                </button>
-              ))}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.ttsSpeed')}
-              </span>
-              <input
-                type="range"
-                min="0.5"
-                max="2"
-                step="0.1"
-                value={ttsRate}
-                onChange={(e) => {
-                  const r = parseFloat(e.target.value);
-                  setTtsRate(r);
-                  localStorage.setItem('reader_tts_rate', String(r));
-                }}
-                style={{ verticalAlign: 'middle', width: 60 }}
-              />
-              <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>{ttsRate}x</span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.lineHeight')}
-              </span>
-              <input
-                type="range"
-                min={1.2}
-                max={2.5}
-                step={0.1}
-                value={lineHeight}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  setLineHeight(v);
-                  localStorage.setItem('reader_line_height', String(v));
-                }}
-                style={{ verticalAlign: 'middle', width: 60 }}
-              />
-              <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>
-                {lineHeight.toFixed(1)}
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.paragraphSpacing')}
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={2}
-                step={0.1}
-                value={paragraphSpacing}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  setParagraphSpacing(v);
-                  localStorage.setItem('reader_paragraph_spacing', String(v));
-                }}
-                style={{ verticalAlign: 'middle', width: 60 }}
-              />
-              <span style={{ fontSize: 13, fontWeight: 600, minWidth: 32 }}>
-                {paragraphSpacing.toFixed(1)}em
-              </span>
-            </div>
-            {/* Font family */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.fontFamily')}
-              </span>
-              {[
-                { key: 'system', label: t('reader.fontFamilySystem') },
-                { key: 'serif', label: t('reader.fontFamilySerif') },
-                { key: 'sans', label: t('reader.fontFamilySans') },
-              ].map((f) => (
-                <button
-                  key={f.key}
-                  onClick={() => {
-                    setFontFamily(f.key);
-                    localStorage.setItem('reader_font_family', f.key);
-                  }}
-                  style={fontFamily === f.key ? btnStyle(true) : btnStyle()}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-            {/* Header / Footer tip slots — 4 visible slots. Middle
-                slots are stored in localStorage but not rendered on
-                web (no 5th position exists). */}
-            <div style={{ display: 'grid', gap: 6, gridColumn: '1 / -1' }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.tipHeaderLeft').split(' ')[0] === t('reader.tipHeaderLeft')
-                  ? t('reader.interfaceSetting')
-                  : 'Header / Footer tips'}
-              </span>
-              <TipSettingsSection
-                headerLeft={tipHeaderLeft}
-                headerRight={tipHeaderRight}
-                footerLeft={tipFooterLeft}
-                footerRight={tipFooterRight}
-                labelStyle={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}
-                selectStyle={btnStyle()}
-              />
-            </div>
-            {/* Background opacity */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.bgAlpha')}
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                step={5}
-                value={bgAlpha}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  setBgAlpha(v);
-                  localStorage.setItem('reader_bg_alpha', String(v));
-                }}
-                aria-label={t('reader.bgAlpha')}
-                style={{ flex: 1, minWidth: 80 }}
-              />
-              <span style={{ fontSize: 12, color: '#888', minWidth: 36, textAlign: 'right' }}>
-                {bgAlpha}%
-              </span>
-            </div>
-            {/* Text align */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                {t('reader.textAlign')}
-              </span>
-              {[
-                { key: 'left', label: t('reader.alignLeft') },
-                { key: 'justify', label: t('reader.alignJustify') },
-              ].map((a) => (
-                <button
-                  key={a.key}
-                  onClick={() => {
-                    setTextAlign(a.key);
-                    localStorage.setItem('reader_text_align', a.key);
-                  }}
-                  style={textAlign === a.key ? btnStyle(true) : btnStyle()}
-                >
-                  {a.label}
-                </button>
-              ))}
-            </div>
-            {/* Content width (desktop only) */}
-            {!isMobileUi && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap' }}>
-                  {t('reader.contentWidth')}
-                </span>
-                <input
-                  type="range"
-                  min={480}
-                  max={1200}
-                  step={40}
-                  value={contentWidth}
-                  onChange={(e) => {
-                    const w = parseInt(e.target.value, 10);
-                    setContentWidth(w);
-                    localStorage.setItem('reader_content_width', String(w));
-                  }}
-                  style={{ verticalAlign: 'middle', width: 80 }}
-                />
-                <span style={{ fontSize: 13, fontWeight: 600, minWidth: 40 }}>
-                  {contentWidth}px
-                </span>
-              </div>
-            )}
-          </div>
-        )}
+        <SettingsPanel
+          open={showSettings}
+          isMobileUi={isMobileUi}
+          baseBg={tStyleBase.bg}
+          border={tStyle.border}
+          text={tStyle.text}
+          fontSize={fontSize}
+          setFontSize={setFontSize}
+          fontFamily={fontFamily}
+          setFontFamily={setFontFamily}
+          lineHeight={lineHeight}
+          setLineHeight={setLineHeight}
+          paragraphSpacing={paragraphSpacing}
+          setParagraphSpacing={setParagraphSpacing}
+          theme={theme}
+          setTheme={setTheme}
+          pageAnim={pageAnim}
+          updatePageAnim={updatePageAnim}
+          ttsRate={ttsRate}
+          setTtsRate={setTtsRate}
+          bgAlpha={bgAlpha}
+          setBgAlpha={setBgAlpha}
+          tipHeaderLeft={tipHeaderLeft}
+          setTipHeaderLeft={setTipHeaderLeft}
+          tipHeaderRight={tipHeaderRight}
+          setTipHeaderRight={setTipHeaderRight}
+          tipFooterLeft={tipFooterLeft}
+          setTipFooterLeft={setTipFooterLeft}
+          tipFooterRight={tipFooterRight}
+          setTipFooterRight={setTipFooterRight}
+          onClose={() => setShowSettings(false)}
+        />
 
         {/* Desktop catalog popover — opened by the top-bar "Chapters" button.
             Anchored under the top bar; closes on chapter pick or on
@@ -2500,7 +2290,7 @@ export default function Reader() {
                 </div>
                 {readerSearchQuery.trim() && (
                   <div style={{ display: 'grid', gap: 6, maxHeight: '24dvh', overflowY: 'auto' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, opacity: 0.78 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12, opacity: 0.78 }}>
                       <span>
                         {totalSearchMatches > 0
                           ? t('reader.searchMatches', { count: totalSearchMatches })
