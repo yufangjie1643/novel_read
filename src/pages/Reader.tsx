@@ -1472,11 +1472,11 @@ export default function Reader() {
             style={{ display: 'flex', gap: 6, alignItems: 'center', minWidth: 0, flexShrink: 0 }}
           >
             <button
-              onClick={() => navigate(readerParentPath.current)}
+              onClick={() => { if (window.history.length > 1) navigate(-1); else navigate("/bookshelf"); }}
               title={t('common.back')}
               aria-label={t('common.back')}
               data-testid="reader-back-btn"
-              style={btnStyle()}
+              style={{ ...btnStyle(), minWidth: 36, fontSize: 16, padding: '6px 12px' }}
             >
               ←
             </button>
