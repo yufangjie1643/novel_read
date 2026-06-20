@@ -96,6 +96,8 @@ pub struct BookChapter {
     pub end_fragment_id: Option<String>,
     pub tag: Option<String>,
     pub word_count: Option<String>,
+    /// Publication time in unix seconds. 0 = unknown / not extracted.
+    pub pub_time: i64,
 }
 
 impl Default for BookChapter {
@@ -112,6 +114,7 @@ impl Default for BookChapter {
             end_fragment_id: None,
             tag: None,
             word_count: None,
+            pub_time: 0,
         }
     }
 }

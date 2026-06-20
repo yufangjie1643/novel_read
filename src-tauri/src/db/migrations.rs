@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS book_chapters (
     endFragmentId TEXT,
     tag TEXT,
     wordCount TEXT,
+    pubTime INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (url, bookUrl)
 );
 "#;
@@ -468,6 +469,11 @@ pub fn run_migrations(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
         "CREATE UNIQUE INDEX IF NOT EXISTS index_cookies_url ON cookies(url)",
         [],
     );
+
+    // --- Chapter metadata: pubTime (publication time, unix seconds) ---
+    // Schema for new DBs already includes this column; for legacy DBs we
+    // add it best-effort. Default 0 = "unknown / not extracted yet".
+    try_add_column(conn, "book_chapters", "pubTime", "INTEGER NOT NULL DEFAULT 0");
 
     // --- P0 high-frequency secondary indices ---
     // All hot lookup paths used by DAOs (`WHERE bookUrl = ?`, group filters, RSS feeds…).

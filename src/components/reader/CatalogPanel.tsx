@@ -74,7 +74,8 @@ export default function CatalogPanel({
     <div
       ref={listRef}
       style={{
-        maxHeight: 360,
+        flex: 1,
+        minHeight: 0,
         overflowY: 'auto',
         margin: '0 -8px',
         padding: '0 8px',
@@ -82,6 +83,9 @@ export default function CatalogPanel({
     >
       {visible.map((ch) => {
         const isCurrent = ch.index === currentIndex;
+        const isRead = !isCurrent && ch.index < currentIndex;
+        const wordText = formatWordCount(ch.wordCount);
+        const pubText = formatPubTime(ch.pubTime);
         return (
           <button
             key={ch.url ?? ch.index}
@@ -89,21 +93,20 @@ export default function CatalogPanel({
             type="button"
             onClick={() => onPick(ch.index)}
             style={{
-              display: 'block',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
               width: '100%',
               textAlign: 'left',
               padding: '10px 12px',
               border: 'none',
               background: isCurrent ? 'rgba(25, 118, 210, 0.12)' : 'transparent',
-              color: isCurrent ? '#1976d2' : '#333',
+              color: isCurrent ? '#1976d2' : isRead ? '#888' : '#333',
               fontSize: 14,
               fontWeight: isCurrent ? 600 : 400,
               cursor: 'pointer',
               borderRadius: 6,
               margin: '2px 0',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
               transition: 'background 0.15s',
             }}
             onMouseEnter={(e) => {
@@ -113,10 +116,59 @@ export default function CatalogPanel({
               if (!isCurrent) e.currentTarget.style.background = 'transparent';
             }}
           >
-            {ch.title || t('reader.chapterTitle', { idx: ch.index })}
+            <span
+              aria-hidden
+              style={{
+                flex: '0 0 auto',
+                width: 14,
+                textAlign: 'center',
+                fontSize: 12,
+                color: isRead ? '#888' : 'transparent',
+              }}
+            >
+              ✓
+            </span>
+            <span
+              style={{
+                flex: 1,
+                minWidth: 0,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {ch.title || t('reader.chapterTitle', { idx: ch.index })}
+            </span>
+            {(wordText || pubText) && (
+              <span
+                style={{
+                  flex: '0 0 auto',
+                  fontSize: 11,
+                  color: isCurrent ? '#1976d2' : '#999',
+                  opacity: 0.85,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {[pubText, wordText].filter(Boolean).join(' · ')}
+              </span>
+            )}
           </button>
         );
       })}
     </div>
   );
+}
+
+function formatWordCount(raw: string | undefined): string {
+  if (!raw) return '';
+  const n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return `${n.toLocaleString()} 字`;
+}
+
+function formatPubTime(unixSeconds: number | undefined): string {
+  if (!unixSeconds || unixSeconds <= 0) return '';
+  const d = new Date(unixSeconds * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }

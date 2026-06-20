@@ -70,6 +70,24 @@ export interface BookSourceGroup {
   customOrder: number;
 }
 
+/** One cookie returned by Edge's CDP `Network.getCookies`. */
+export interface CookieEntry {
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+}
+
+/** Result of `start_cookie_sync` Tauri command. */
+export interface CookieSyncHandle {
+  sync_id: string;
+  port: number;
+  login_url: string;
+}
+
 export interface SearchBook {
   name: string;
   author?: string;
@@ -110,6 +128,9 @@ export interface BookChapter {
   book_url: string;
   index: number;
   title: string;
+  wordCount?: string;
+  /** Publication time in unix seconds. 0 = unknown / not extracted. */
+  pubTime?: number;
 }
 
 export interface BookGroup {

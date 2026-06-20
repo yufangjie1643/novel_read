@@ -23,13 +23,12 @@ export default function ChapterCatalog() {
     setLoading(true);
     setMessage('');
     (async () => {
-      const bookResp = await invoke<ApiResponse<Book>>('get_book', { bookUrl: decodedUrl });
-      if (!bookResp.success || !bookResp.data) {
-        setMessage(t('reader.loadBookFailed', { error: bookResp.error || '' }));
-        setLoading(false);
-        return;
-      }
-      setBook(bookResp.data);
+      const booksResp = await invoke<ApiResponse<Book[]>>('get_books');
+      const found = booksResp.success && booksResp.data
+        ? booksResp.data.find((b) => b.book_url === decodedUrl)
+        : undefined;
+      if (found) setBook(found);
+
       const chapResp = await invoke<ApiResponse<BookChapter[]>>('get_chapters', {
         bookUrl: decodedUrl,
       });

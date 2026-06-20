@@ -611,6 +611,11 @@ pub async fn set_cookie(
     app_handle: tauri::AppHandle,
     url: String, cookie: String,
 ) -> ApiResponse<()> {
+    // Mirror the cookie into the in-process `JsExtState` so the next
+    // web_book search / fetch-chapter actually carries it as a Cookie
+    // header. Persisting to the DB alone is not enough — web_book reads
+    // from the in-memory store keyed by source_url.
+    JsExtState::global().set_cookie(&url, &cookie);
     db_op(app_handle, move |conn| {
         CookieDao::new(conn).insert_or_update(&url, &cookie).map(|_| ())
     })
@@ -4317,6 +4322,65 @@ async fn upsert_book_progress_sync(
         Ok(())
     } else {
         Err(resp.error.unwrap_or_else(|| "db upsert failed".to_string()))
+    }
+}
+
+// ============================================================================
+// Cookie sync (Edge CDP) — thin wrappers over crate::cookie_sync
+// ============================================================================
+
+#[tauri::command]
+pub async fn start_cookie_sync(
+    app_handle: tauri::AppHandle,
+    source_url: String,
+    login_url: String,
+) -> ApiResponse<crate::cookie_sync::SyncHandle> {
+    match crate::cookie_sync::start_cookie_sync(app_handle, source_url, login_url).await {
+        Ok(h) => ApiResponse {
+            success: true,
+            data: Some(h),
+            error: None,
+        },
+        Err(e) => ApiResponse {
+            success: false,
+            data: None,
+            error: Some(e),
+        },
+    }
+}
+
+#[tauri::command]
+pub async fn read_cookies_via_edge(
+    app_handle: tauri::AppHandle,
+    sync_id: String,
+) -> ApiResponse<Vec<crate::cookie_sync::CookieEntry>> {
+    match crate::cookie_sync::read_cookies_via_edge(app_handle, sync_id).await {
+        Ok(v) => ApiResponse {
+            success: true,
+            data: Some(v),
+            error: None,
+        },
+        Err(e) => ApiResponse {
+            success: false,
+            data: None,
+            error: Some(e),
+        },
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_cookie_sync(sync_id: String) -> ApiResponse<()> {
+    match crate::cookie_sync::cancel_cookie_sync(&sync_id) {
+        Ok(()) => ApiResponse {
+            success: true,
+            data: Some(()),
+            error: None,
+        },
+        Err(e) => ApiResponse {
+            success: false,
+            data: None,
+            error: Some(e),
+        },
     }
 }
 

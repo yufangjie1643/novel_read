@@ -2324,6 +2324,7 @@ dependencies = [
  "deadpool-sync",
  "encoding_rs",
  "epub",
+ "once_cell",
  "rand_core 0.6.4",
  "regex",
  "reqwest 0.12.28",

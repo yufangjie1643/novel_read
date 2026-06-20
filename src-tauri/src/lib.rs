@@ -3,6 +3,7 @@ pub mod chinese_utils;
 pub mod commands;
 pub mod content_processor;
 pub mod controllers;
+pub mod cookie_sync;
 #[allow(invalid_reference_casting)]
 pub mod db;
 pub mod http;
@@ -48,6 +49,7 @@ pub fn run() {
             migrate_book_source,
             // BookSource commands
             get_book_sources,
+            get_book_source_summaries,
             get_source_stats,
             get_enabled_book_sources,
             get_explore_book_sources,
@@ -157,6 +159,10 @@ pub fn run() {
             fetch_chapter_list,
             ping_source,
             fetch_chapter_content,
+            // Cookie sync (Edge CDP)
+            start_cookie_sync,
+            read_cookies_via_edge,
+            cancel_cookie_sync,
             // Book update check
             check_book_update,
             // Local book import commands

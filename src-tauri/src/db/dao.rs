@@ -577,8 +577,8 @@ impl<'a> BookChapterDao<'a> {
         self.conn.execute(
             r#"INSERT INTO book_chapters (
                 url, bookUrl, "index", title, isVolume, isVip, isPay,
-                startFragmentId, endFragmentId, tag, wordCount
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                startFragmentId, endFragmentId, tag, wordCount, pubTime
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"#,
             params![
                 chapter.url,
                 chapter.book_url,
@@ -590,7 +590,8 @@ impl<'a> BookChapterDao<'a> {
                 chapter.start_fragment_id,
                 chapter.end_fragment_id,
                 chapter.tag,
-                chapter.word_count
+                chapter.word_count,
+                chapter.pub_time
             ],
         )?;
         Ok(())
@@ -601,8 +602,8 @@ impl<'a> BookChapterDao<'a> {
         let mut stmt = conn.prepare(
             r#"INSERT INTO book_chapters (
                 url, bookUrl, "index", title, isVolume, isVip, isPay,
-                startFragmentId, endFragmentId, tag, wordCount
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"#,
+                startFragmentId, endFragmentId, tag, wordCount, pubTime
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"#,
         )?;
         for chapter in chapters {
             stmt.execute(params![
@@ -616,7 +617,8 @@ impl<'a> BookChapterDao<'a> {
                 chapter.start_fragment_id,
                 chapter.end_fragment_id,
                 chapter.tag,
-                chapter.word_count
+                chapter.word_count,
+                chapter.pub_time
             ])?;
         }
         Ok(())
@@ -681,6 +683,7 @@ impl<'a> BookChapterDao<'a> {
             end_fragment_id: row.get("endFragmentId").ok(),
             tag: row.get("tag").ok(),
             word_count: row.get("wordCount").ok(),
+            pub_time: row.get::<_, i64>("pubTime").unwrap_or(0),
         })
     }
 }
